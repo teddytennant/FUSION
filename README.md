@@ -1,6 +1,6 @@
-# JARVIS: Joint Agents Reviewing Via Iterative Synthesis
+# FUSION: Federated Unified Systems Integration Orchestration Network
 
-JARVIS is a Python multi-agent chatbot framework that tethers multiple LLMs via the OpenRouter API to debate, review, and synthesize responses iteratively. It aims to produce answers that outperform individual models across various fields.
+FUSION is a Python multi-agent chatbot framework that tethers multiple LLMs via the OpenRouter API to debate, review, and synthesize responses iteratively. It aims to produce answers that outperform individual models across various fields.
 
 ## Features
 - Multiple agents (e.g., Gemini 2.5 Pro, Grok-4, DeepSeek) generate and iteratively refine answers
@@ -21,33 +21,17 @@ JARVIS is a Python multi-agent chatbot framework that tethers multiple LLMs via 
 - `requests` (optional). If missing, Python's `urllib` is used automatically.
 - Optional: PyTorch for advanced features (currently not required)
 
-## Install & Global Usage
-### Clone
+## Installation
 ```bash
-git clone https://github.com/teddytennant/JARVIS
-cd JARVIS
+git clone https://github.com/teddytennant/FUSION
+cd FUSION
+sudo ln -s "$(pwd)/fusion" /usr/local/bin/fusion
 ```
-
-### Use the launcher `jarvis`
-- Option A: run in repo
-  ```bash
-  ./jarvis --onboard
-  ```
-- Option B: add repo to PATH (zsh)
-  ```bash
-  echo 'export PATH="$PATH:/Users/youruser/path/to/JARVIS"' >> ~/.zshrc && source ~/.zshrc
-  jarvis --onboard
-  ```
-- Option C (recommended): symlink to a bin directory
-  ```bash
-  sudo ln -s /Users/youruser/path/to/JARVIS/jarvis /usr/local/bin/jarvis
-  jarvis --onboard
-  ```
 
 ## Quick Start
 ### Onboarding flow (no shell exports)
 ```bash
-jarvis --onboard
+fusion --onboard
 ```
 - Paste your `OPENROUTER_API_KEY` when prompted (hidden input).
 - Optionally save it to `.env` for future runs.
@@ -58,7 +42,7 @@ jarvis --onboard
 - Temporary for current shell:
   ```bash
   export OPENROUTER_API_KEY="sk-or-..."
-  jarvis --query "Explain quantum computing simply." --rounds 2 --temperature 0.6
+  fusion --query "Explain quantum computing simply." --rounds 2 --temperature 0.6
   ```
 - Persist to future shells (zsh):
   ```bash
@@ -86,13 +70,13 @@ Provide the real key value in JSON (no env substitution inside the file):
   "temperature": 0.7,
   "headers": {
     "HTTP-Referer": "http://localhost",
-    "X-Title": "JARVIS"
+    "X-Title": "FUSION"
   }
 }
 ```
 Run with:
 ```bash
-jarvis --config config.json --query "Explain quantum computing simply."
+fusion --config config.json --query "Explain quantum computing simply."
 ```
 
 ## Usage Reference
@@ -119,7 +103,7 @@ Dataset: a JSON array with at least `prompt` per item (optional `id`, `expected`
 ```
 Run:
 ```bash
-jarvis --benchmark path/to/dataset.json --benchmark-output results.json
+fusion --benchmark path/to/dataset.json --benchmark-output results.json
 ```
 
 ## Customizing Models
@@ -131,21 +115,21 @@ You can add/swap agents via config. Example OpenRouter model IDs:
 - Others (Claude, etc.) can be added similarly
 
 ### Fallbacks
-If a model is unavailable for your key (e.g., 400/404 “not a valid model ID” or “no allowed providers”), JARVIS will automatically attempt configured fallbacks per agent and synthesizer before failing.
+If a model is unavailable for your key (e.g., 400/404 “not a valid model ID” or “no allowed providers”), FUSION will automatically attempt configured fallbacks per agent and synthesizer before failing.
 
 ### Mock Responses
-If the API key is missing or a request can’t be served, JARVIS returns clearly labeled mock responses so you can still see the debate flow. The UI shows a red warning when mock output is used.
+If the API key is missing or a request can’t be served, FUSION returns clearly labeled mock responses so you can still see the debate flow. The UI shows a red warning when mock output is used.
 
 ## Notes on Costs
-JARVIS makes multiple calls per round per agent plus a final synthesis. The app emits approximate token‑usage warnings.
+FUSION makes multiple calls per round per agent plus a final synthesis. The app emits approximate token‑usage warnings.
 
 ## Troubleshooting
-- Prefer `jarvis --onboard` to paste your key and run a quick connectivity check.
+- Prefer `fusion --onboard` to paste your key and run a quick connectivity check.
 - If outputs are empty, your key may lack access to the selected models; enable them in OpenRouter or rely on fallbacks.
 - The client retries on common rate‑limit/5xx errors with exponential backoff.
 - Inspect `logs/runs.jsonl` for intermediate prompts, responses, and metadata.
 
 ## Example
 ```bash
-jarvis --onboard
-``` 
+fusion --onboard
+```
