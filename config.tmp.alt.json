@@ -1,0 +1,10 @@
+{
+  "agents": [
+    {"name": "Gemini Flash 1.5 8B", "model": "google/gemini-flash-1.5-8b", "role": "general reasoning"},
+    {"name": "Grok-3 Mini", "model": "x-ai/grok-3-mini", "role": "factual accuracy"}
+  ],
+  "synthesizer": {"name": "Gemini Flash 1.5 8B", "model": "google/gemini-flash-1.5-8b"},
+  "rounds": 1,
+  "max_tokens": 48,
+  "temperature": 0.2
+} 
