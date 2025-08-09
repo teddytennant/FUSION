@@ -12,6 +12,8 @@ JARVIS is a Python multi-agent chatbot framework that tethers multiple LLMs via 
 - Optional Paper Writing Mode (structured academic output)
 - Interactive ASCII onboarding to paste API key (no shell exports needed)
 - Automatic model fallbacks when a preferred model is unavailable for your key
+- Terminal UI with spinners and optional typewriter output
+- Mock responses when API key is missing/unavailable (clearly warned in UI)
 
 ## Requirements
 - Python 3.10+
@@ -19,12 +21,35 @@ JARVIS is a Python multi-agent chatbot framework that tethers multiple LLMs via 
 - `requests` (optional). If missing, Python's `urllib` is used automatically.
 - Optional: PyTorch for advanced features (currently not required)
 
-## Quick Start
-### Recommended: Onboarding flow (no shell exports)
+## Install & Global Usage
+### Clone
 ```bash
-python jarvis.py --onboard
+git clone https://github.com/teddytennant/JARVIS
+cd JARVIS
 ```
-- Paste your `OPENROUTER_API_KEY` when prompted (input is hidden).
+
+### Use the launcher `jarvis`
+- Option A: run in repo
+  ```bash
+  ./jarvis --onboard
+  ```
+- Option B: add repo to PATH (zsh)
+  ```bash
+  echo 'export PATH="$PATH:/Users/youruser/path/to/JARVIS"' >> ~/.zshrc && source ~/.zshrc
+  jarvis --onboard
+  ```
+- Option C (recommended): symlink to a bin directory
+  ```bash
+  sudo ln -s /Users/youruser/path/to/JARVIS/jarvis /usr/local/bin/jarvis
+  jarvis --onboard
+  ```
+
+## Quick Start
+### Onboarding flow (no shell exports)
+```bash
+jarvis --onboard
+```
+- Paste your `OPENROUTER_API_KEY` when prompted (hidden input).
 - Optionally save it to `.env` for future runs.
 - A quick connectivity check runs using non‑Llama models (with an optional last‑resort Llama check).
 - If you didn’t pass `--query`, you’ll be prompted to type one interactively.
@@ -33,7 +58,7 @@ python jarvis.py --onboard
 - Temporary for current shell:
   ```bash
   export OPENROUTER_API_KEY="sk-or-..."
-  python jarvis.py --query "Explain quantum computing simply." --rounds 2 --temperature 0.6
+  jarvis --query "Explain quantum computing simply." --rounds 2 --temperature 0.6
   ```
 - Persist to future shells (zsh):
   ```bash
@@ -67,7 +92,7 @@ Provide the real key value in JSON (no env substitution inside the file):
 ```
 Run with:
 ```bash
-python jarvis.py --config config.json --query "Explain quantum computing simply."
+jarvis --config config.json --query "Explain quantum computing simply."
 ```
 
 ## Usage Reference
@@ -79,6 +104,10 @@ python jarvis.py --config config.json --query "Explain quantum computing simply.
 - `--paper-mode`: enforce academic structure in outputs
 - `--config path.json`: JSON config to customize models/headers/etc
 - `--log-file path.jsonl`: where to stream JSONL logs (default `logs/runs.jsonl`)
+- UI flags:
+  - `--no-ansi`: disable colors
+  - `--no-anim`: disable spinners/typewriter
+  - `--typewriter-ms N`: delay per character in ms for final answer
 
 ### Benchmark Mode
 Dataset: a JSON array with at least `prompt` per item (optional `id`, `expected`):
@@ -90,7 +119,7 @@ Dataset: a JSON array with at least `prompt` per item (optional `id`, `expected`
 ```
 Run:
 ```bash
-python jarvis.py --benchmark path/to/dataset.json --benchmark-output results.json
+jarvis --benchmark path/to/dataset.json --benchmark-output results.json
 ```
 
 ## Customizing Models
@@ -104,16 +133,19 @@ You can add/swap agents via config. Example OpenRouter model IDs:
 ### Fallbacks
 If a model is unavailable for your key (e.g., 400/404 “not a valid model ID” or “no allowed providers”), JARVIS will automatically attempt configured fallbacks per agent and synthesizer before failing.
 
+### Mock Responses
+If the API key is missing or a request can’t be served, JARVIS returns clearly labeled mock responses so you can still see the debate flow. The UI shows a red warning when mock output is used.
+
 ## Notes on Costs
 JARVIS makes multiple calls per round per agent plus a final synthesis. The app emits approximate token‑usage warnings.
 
 ## Troubleshooting
-- Prefer `python jarvis.py --onboard` to paste your key and run a quick connectivity check.
+- Prefer `jarvis --onboard` to paste your key and run a quick connectivity check.
 - If outputs are empty, your key may lack access to the selected models; enable them in OpenRouter or rely on fallbacks.
 - The client retries on common rate‑limit/5xx errors with exponential backoff.
 - Inspect `logs/runs.jsonl` for intermediate prompts, responses, and metadata.
 
 ## Example
 ```bash
-python jarvis.py --onboard
+jarvis --onboard
 ``` 

@@ -1,18 +1,13 @@
 #!/usr/bin/env python3
 """
-JARVIS (Joint Agents Reviewing Via Iterative Synthesis)
+JARVIS (Joint Agents Reviewing Via Iterative Synthesis) - Core Framework
 
-This module implements a multi-agent debate and synthesis framework that
-routes all model calls through OpenRouter. Multiple agents generate answers,
-critique each other over several rounds, and a synthesizer merges results
-into a final response. Includes:
-- Robust HTTP handling with retries and simple token estimates
-- Optional interactive onboarding (paste API key, quick connectivity check)
-- Automatic model fallbacks when preferred models are unavailable
-- Basic benchmarking utilities
+This module contains the core classes for the JARVIS framework, including:
+- Agent: A wrapper for language model APIs.
+- Jarvis: The orchestrator for multi-agent debates.
+- TerminalUI: A lightweight terminal UI toolkit.
 """
 
-import argparse
 import json
 import os
 import sys
@@ -23,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import getpass
 import threading
 from contextlib import contextmanager
+import shutil
 
 # Optional torch import for advanced features (e.g., cosine similarity)
 try:
@@ -283,6 +279,8 @@ class TerminalUI:
         self.COLOR_GREEN = "\x1b[32m" if self.enable_ansi else ""
         self.COLOR_RED = "\x1b[31m" if self.enable_ansi else ""
         self.COLOR_YELLOW = "\x1b[33m" if self.enable_ansi else ""
+        self.COLOR_MAGENTA = "\x1b[35m" if self.enable_ansi else ""
+        self.COLOR_BLUE = "\x1b[34m" if self.enable_ansi else ""
 
     def _println(self, text: str = "") -> None:
         sys.stdout.write(text + ("\n" if not text.endswith("\n") else ""))
@@ -293,6 +291,39 @@ class TerminalUI:
             self._println(f"{color}{text}{self.COLOR_RESET}")
         else:
             self._println(text)
+
+    def _term_width(self) -> int:
+        try:
+            return max(40, shutil.get_terminal_size((80, 20)).columns)
+        except Exception:
+            return 80
+
+    def prompt_box(self, title: str = "JARVIS", prompt_label: str = "Enter your query") -> str:
+        """Draw a more stylish box for input."""
+        width = min(100, self._term_width() - 2)
+        inner_w = width - 2
+        
+        title_len = len(title) + 2
+        title_pad_left = (inner_w - title_len) // 2
+        title_pad_right = inner_w - title_len - title_pad_left
+
+        if self.enable_ansi:
+            title_text = f" {self.COLOR_YELLOW}{title}{self.COLOR_CYAN} "
+            top = self.COLOR_CYAN + "╔" + "═" * title_pad_left + title_text + "═" * title_pad_right + "╗" + self.COLOR_RESET
+            bottom = self.COLOR_CYAN + "╚" + "═" * inner_w + "╝" + self.COLOR_RESET
+            prompt_text = self.COLOR_CYAN + f"║ {prompt_label}: " + self.COLOR_RESET
+        else:
+            top = "┌" + "─" * title_pad_left + f" {title} " + "─" * title_pad_right + "┐"
+            bottom = "└" + "─" * inner_w + "┘"
+            prompt_text = f"│ {prompt_label}: "
+
+        self._println(top)
+        try:
+            user_input = input(prompt_text)
+        except EOFError:
+            user_input = ""
+        self._println(bottom)
+        return user_input
 
     @contextmanager
     def spinner(self, label: str):
@@ -325,6 +356,55 @@ class TerminalUI:
                 sys.stdout.write("\r" + " " * (len(label) + 4) + "\r")
                 sys.stdout.flush()
 
+    @contextmanager
+    def synth_progress(self, label: str = "Synthesizing", bar_width: int = 30):
+        """A more dynamic progress animation."""
+        stop = threading.Event()
+        width = max(10, min(bar_width, self._term_width() - len(label) - 10))
+        
+        def run() -> None:
+            pos = 0
+            direction = 1
+            scanner_width = 5
+            while not stop.is_set():
+                if self.enable_anim:
+                    bar = ["─"] * width
+                    start = pos
+                    end = min(width, pos + scanner_width)
+                    for j in range(start, end):
+                        bar[j] = "━"
+
+                    bar_line = "".join(bar)
+                    if self.enable_ansi:
+                        sys.stdout.write(f"\r{self.COLOR_BLUE}{label}{self.COLOR_RESET} [{self.COLOR_MAGENTA}{bar_line}{self.COLOR_RESET}]")
+                    else:
+                        sys.stdout.write(f"\r{label} [{bar_line}]")
+                    sys.stdout.flush()
+                    
+                    pos += direction
+                    if pos >= width - scanner_width:
+                        direction = -1
+                        pos = width - scanner_width
+                    if pos <= 0:
+                        direction = 1
+                        pos = 0
+                time.sleep(0.08)
+        
+        t: Optional[threading.Thread] = None
+        if self.enable_anim:
+            t = threading.Thread(target=run, daemon=True)
+            t.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            if t is not None:
+                t.join(timeout=0.2)
+            if self.enable_anim:
+                clear_len = len(label) + width + 6
+                sys.stdout.write("\r" + " " * clear_len + "\r")
+                sys.stdout.flush()
+
     def endline(self, ok: bool, text: str) -> None:
         icon = self.TICK if ok else self.CROSS
         color = self.COLOR_GREEN if ok else self.COLOR_RED
@@ -333,15 +413,41 @@ class TerminalUI:
         else:
             self._println(f"{icon} {text}")
 
+    def print_ascii_header(self) -> None:
+        """Render the JARVIS ASCII banner with colors."""
+        header = r"""
+      ██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗
+      ██║██╔══██╗██╔══██╗██║   ██║██║██╔════╝
+      ██║███████║██████╔╝██║   ██║██║███████╗
+ ██   ██║██╔══██║██╔══██╗██║   ██║██║╚════██║
+ ╚█████╔╝██║  ██║██║  ██║╚██████╔╝██║███████║
+  ╚════╝ ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝╚══════╝
+        """
+        subtitle = " Joint Agents Reviewing Via Iterative Synthesis"
+        if self.enable_ansi:
+            colors = [self.COLOR_MAGENTA, self.COLOR_CYAN, self.COLOR_BLUE]
+            lines = header.split('\n')
+            for i, line in enumerate(lines):
+                if line.strip():
+                    self._println(colors[i % len(colors)] + line)
+            self._println(self.COLOR_YELLOW + subtitle)
+        else:
+            self._println(header)
+            self._println(subtitle)
+
     def typewriter(self, text: str) -> None:
         if not self.enable_anim or self.typewriter_ms <= 0:
-            self._println(text)
+            self._println(self.COLOR_GREEN + text + self.COLOR_RESET if self.enable_ansi else text)
             return
         delay = self.typewriter_ms / 1000.0
+        if self.enable_ansi:
+            sys.stdout.write(self.COLOR_GREEN)
         for ch in text:
             sys.stdout.write(ch)
             sys.stdout.flush()
             time.sleep(delay)
+        if self.enable_ansi:
+            sys.stdout.write(self.COLOR_RESET)
         if not text.endswith("\n"):
             sys.stdout.write("\n")
             sys.stdout.flush()
@@ -456,9 +562,6 @@ class Jarvis:
         }
 
         if ui:
-            if not (self.api_key and self.api_key.strip()):
-                ui.print_status("Warning: OPENROUTER_API_KEY not set. Using mock responses.", ui.COLOR_RED)
-                self.mock_warning_printed = True
             ui.print_status("Starting debate...", ui.COLOR_YELLOW)
 
         # 1) Initial answers from all agents
@@ -565,7 +668,7 @@ class Jarvis:
         synth_prompt = self._build_synthesis_prompt(query, agent_latest, paper_mode)
         label = "Synthesis"
         if ui:
-            with ui.spinner(label):
+            with ui.synth_progress(label):
                 synth_res = self.synthesizer.generate(
                     prompt=synth_prompt,
                     max_tokens=self.max_tokens,
@@ -666,321 +769,3 @@ class Jarvis:
             f"Agent Answers:\n{outputs_joined}\n\n"
             "Final Answer:"
         )
-
-
-def load_config(config_path: Optional[str]) -> Dict[str, Any]:
-    """Load a JSON config from disk, or return empty dict if None."""
-    if not config_path:
-        return {}
-    with open(config_path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def build_default_config() -> Dict[str, Any]:
-    """Default configuration with reasonable models and fallbacks."""
-    return {
-        "api_key": os.getenv("OPENROUTER_API_KEY", ""),
-        "agents": [
-            {
-                "name": "Gemini 2.5 Pro",
-                "model": "google/gemini-2.5-pro-preview",
-                "role": "general reasoning",
-                "fallback_models": [
-                    "google/gemini-2.0-flash-lite-001",
-                    "google/gemini-flash-1.5-8b",
-                ],
-            },
-            {
-                "name": "Grok-4",
-                "model": "x-ai/grok-4",
-                "role": "factual accuracy",
-                "fallback_models": [
-                    "x-ai/grok-3",
-                    "x-ai/grok-3-mini",
-                ],
-            },
-            {
-                "name": "DeepSeek",
-                "model": "deepseek/deepseek-coder",
-                "role": "coding and math",
-                "fallback_models": [
-                    "deepseek/deepseek-chat",
-                ],
-            },
-        ],
-        "synthesizer": {
-            "name": "Gemini 2.5 Pro",
-            "model": "google/gemini-2.5-pro-preview",
-            "fallback_models": [
-                "google/gemini-2.0-flash-lite-001",
-                "google/gemini-flash-1.5-8b",
-            ],
-        },
-        "rounds": 3,
-        "max_tokens": 1000,
-        "temperature": 0.7,
-        "headers": {},
-        "seed": None,
-    }
-
-
-def build_jarvis_from_config(cfg: Dict[str, Any]) -> Jarvis:
-    """Merge user config with defaults and build the orchestrator."""
-    merged = build_default_config()
-    merged.update({k: v for k, v in cfg.items() if v is not None})
-
-    api_key: str = merged.get("api_key") or ""
-    if not api_key:
-        raise RuntimeError("Missing OPENROUTER_API_KEY. Set it via onboarding, env, or config.")
-
-    agent_cfgs = [AgentConfig(**a) for a in merged.get("agents", [])]
-    synthesizer_cfg = AgentConfig(**merged["synthesizer"]) if merged.get("synthesizer") else None  # type: ignore
-
-    jarvis = Jarvis(
-        api_key=api_key,
-        agents=agent_cfgs,
-        rounds=int(merged.get("rounds", 3)),
-        max_tokens=int(merged.get("max_tokens", 1000)),
-        temperature=float(merged.get("temperature", 0.7)),
-        synthesizer=synthesizer_cfg,
-        request_headers=merged.get("headers", {}),
-        seed=merged.get("seed"),
-    )
-    return jarvis
-
-
-def run_single_query(jarvis: Jarvis, query: str, paper_mode: bool = False, ui: Optional[TerminalUI] = None) -> str:
-    """Convenience wrapper for single interactive runs."""
-    final_answer, _meta = jarvis.debate(query=query, paper_mode=paper_mode, ui=ui)
-    return final_answer
-
-
-def run_benchmark(jarvis: Jarvis, dataset_path: str, output_path: Optional[str]) -> None:
-    """Load a simple dataset and evaluate queries sequentially."""
-    with open(dataset_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    assert isinstance(data, list), "Benchmark dataset must be a list of items."
-
-    results = []
-    for i, item in enumerate(data, start=1):
-        prompt = item.get("prompt") or item.get("query")
-        if not prompt:
-            continue
-        print(f"[Benchmark] {i}/{len(data)}: {prompt[:80]}...")
-        answer, meta = jarvis.debate(query=prompt, paper_mode=False)
-        results.append({
-            "id": item.get("id", i),
-            "prompt": prompt,
-            "expected": item.get("expected"),
-            "answer": answer,
-            "meta": meta,
-        })
-    if output_path:
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
-        print(f"Saved benchmark results to {output_path}")
-    else:
-        print(json.dumps(results[:3], ensure_ascii=False, indent=2))  # preview
-
-
-def print_ascii_header() -> None:
-    """Render the JARVIS ASCII banner."""
-    header = r"""
-      ██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗
-      ██║██╔══██╗██╔══██╗██║   ██║██║██╔════╝
-      ██║███████║██████╔╝██║   ██║██║███████╗
- ██   ██║██╔══██║██╔══██╗██║   ██║██║╚════██║
- ╚█████╔╝██║  ██║██║  ██║╚██████╔╝██║███████║
-  ╚════╝ ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚═╝╚══════╝
-
- Joint Agents Reviewing Via Iterative Synthesis
-    """
-    print(header)
-
-
-def prompt_for_api_key_interactive() -> Optional[str]:
-    """Prompt the user for an OpenRouter API key (hidden input)."""
-    print("Welcome to JARVIS. To start, you need an OpenRouter API key.")
-    print("Paste your key below (it will not be echoed), or press Enter to cancel.")
-    try:
-        key = getpass.getpass(prompt="OPENROUTER_API_KEY: ")
-    except Exception:
-        key = input("OPENROUTER_API_KEY: ")
-    key = (key or "").strip()
-    if not key:
-        print("No key entered. Aborting onboarding.")
-        return None
-    return key
-
-
-def maybe_save_env_var(key: str, env_path: str = ".env") -> None:
-    """Offer to append the API key to a .env file for convenience."""
-    choice = input("Save this key to .env for future runs? [y/N]: ").strip().lower()
-    if choice in ("y", "yes"):
-        try:
-            line = f"export OPENROUTER_API_KEY=\"{key}\"\n"
-            with open(env_path, "a", encoding="utf-8") as f:
-                f.write(line)
-            print(f"Saved to {env_path}. Next time, run: source {env_path}")
-        except Exception as e:  # noqa: BLE001
-            print(f"Could not save to {env_path}: {e}")
-
-
-def quick_connectivity_check(key: str) -> Tuple[bool, str]:
-    """Fire a short request across several non‑Llama models to verify access.
-
-    Optionally offers a consented last-resort Llama test.
-    """
-    candidate_models = [
-        "google/gemini-2.0-flash-lite-001",
-        "google/gemini-flash-1.5-8b",
-        "x-ai/grok-3-mini",
-        "x-ai/grok-3",
-    ]
-    print("\nRunning a quick connectivity check...\n")
-    test_agent = Agent(
-        name="ConnectivityCheck",
-        model=candidate_models[0],
-        api_key=key,
-        max_retries=1,
-        timeout=30,
-        request_headers={},
-        default_system_prompt="You are a minimal assistant.",
-        fallback_models=candidate_models[1:],
-    )
-    res = test_agent.generate(prompt="Reply with OK.", max_tokens=16, temperature=0.0)
-    if res.content.strip():
-        print("Connectivity check succeeded.")
-        return True, res.content.strip()
-    consent = input("Non-Llama models failed. Try Llama 3.1 8B as a last resort? [y/N]: ").strip().lower()
-    if consent in ("y", "yes"):
-        llama_agent = Agent(
-            name="ConnectivityCheckLlama",
-            model="meta-llama/llama-3.1-8b-instruct",
-            api_key=key,
-            max_retries=1,
-            timeout=30,
-            request_headers={},
-            default_system_prompt="You are a minimal assistant.",
-        )
-        res2 = llama_agent.generate(prompt="Reply with OK.", max_tokens=16, temperature=0.0)
-        if res2.content.strip():
-            print("Connectivity check succeeded with Llama.")
-            return True, res2.content.strip()
-    print("Connectivity check failed.")
-    return False, ""
-
-
-def interactive_onboarding() -> Optional[str]:
-    """Run the ASCII onboarding: banner, key prompt, connectivity test, save option."""
-    print_ascii_header()
-    print("This program debates across multiple models via OpenRouter and synthesizes a final answer.")
-    print("You can paste your API key now; no terminal exports needed.")
-    key = prompt_for_api_key_interactive()
-    if not key:
-        return None
-    os.environ["OPENROUTER_API_KEY"] = key
-    ok, _sample = quick_connectivity_check(key)
-    maybe_save_env_var(key)
-    if ok:
-        print("\nReady. You can now ask a question directly.")
-        return key
-    print("\nWarning: No accessible models were found for this key. You may need to enable models in OpenRouter.")
-    return key
-
-
-def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
-    """Define CLI arguments for interactive and scripted usage."""
-    parser = argparse.ArgumentParser(
-        description="JARVIS: Joint Agents Reviewing Via Iterative Synthesis",
-    )
-    parser.add_argument(
-        "--onboard",
-        action="store_true",
-        help="Run interactive onboarding (paste API key, quick connectivity check)",
-    )
-    # UI flags
-    parser.add_argument("--no-ansi", action="store_true", help="Disable ANSI colors and styling")
-    parser.add_argument("--no-anim", action="store_true", help="Disable spinner and typewriter animations")
-    parser.add_argument("--typewriter-ms", type=int, default=0, help="Final answer typewriter delay per char in ms (0 to disable)")
-    parser.add_argument("--query", type=str, help="User query to answer")
-    parser.add_argument("--rounds", type=int, default=None, help="Number of debate/review rounds (overrides config)")
-    parser.add_argument("--temperature", type=float, default=None, help="Sampling temperature (overrides config)")
-    parser.add_argument("--max-tokens", type=int, default=None, help="Max tokens for each generation (overrides config)")
-    parser.add_argument("--config", type=str, default=None, help="Path to a JSON config file")
-    parser.add_argument("--paper-mode", action="store_true", help="Enable paper writing mode (structured academic output)")
-    parser.add_argument("--benchmark", type=str, default=None, help="Path to a benchmark JSON dataset (list of {id,prompt,expected})")
-    parser.add_argument("--benchmark-output", type=str, default=None, help="Where to write benchmark results (JSON)")
-    parser.add_argument("--log-file", type=str, default=None, help="Optional log file path (JSONL). Defaults to logs/runs.jsonl")
-    return parser.parse_args(argv)
-
-
-def main(argv: Optional[List[str]] = None) -> None:
-    """CLI entry: parse args, onboard if needed, build Jarvis, run query/benchmark."""
-    args = parse_args(argv)
-    file_cfg = load_config(args.config)
-    cfg = build_default_config()
-    cfg.update({k: v for k, v in file_cfg.items() if v is not None})
-
-    # Onboarding when requested or when no API key present
-    if args.onboard or not (cfg.get("api_key") or os.getenv("OPENROUTER_API_KEY")):
-        interactive_onboarding()
-        cfg["api_key"] = os.getenv("OPENROUTER_API_KEY", "")
-
-    # CLI overrides for quick experimentation
-    if args.rounds is not None:
-        cfg["rounds"] = args.rounds
-    if args.temperature is not None:
-        cfg["temperature"] = args.temperature
-    if getattr(args, "max_tokens") is not None:
-        cfg["max_tokens"] = args.max_tokens
-
-    # Build orchestrator
-    jarvis = build_jarvis_from_config(cfg)
-
-    # UI setup
-    ui = TerminalUI(enable_ansi=(not args.no_ansi), enable_anim=(not args.no_anim), typewriter_ms=args.typewriter_ms)
-
-    # Optional log file override
-    if args.log_file:
-        for h in list(jarvis.logger.handlers):
-            jarvis.logger.removeHandler(h)
-        fh = logging.FileHandler(args.log_file)
-        sh = logging.StreamHandler(sys.stderr if ui.enable_anim else sys.stdout)
-        fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-        fh.setFormatter(fmt)
-        sh.setFormatter(fmt)
-        jarvis.logger.addHandler(fh)
-        jarvis.logger.addHandler(sh)
-        jarvis.run_log_path = args.log_file
-    else:
-        # Re-route console logs to stderr when animating to avoid spinner clashes
-        for h in jarvis.logger.handlers:
-            if isinstance(h, logging.StreamHandler):
-                h.stream = sys.stderr if ui.enable_anim else sys.stdout
-
-    # Benchmark mode exits after run
-    if args.benchmark:
-        run_benchmark(jarvis, args.benchmark, args.benchmark_output)
-        return
-
-    # Interactive prompt when no --query provided
-    if not args.query:
-        print("\nEnter your query (or press Enter to exit):")
-        try:
-            q = input("> ").strip()
-        except EOFError:
-            q = ""
-        if not q:
-            print("No query provided. Exiting.")
-            return
-        args.query = q
-
-    final = run_single_query(jarvis, args.query, paper_mode=args.paper_mode, ui=ui)
-    print("\n==== JARVIS Final Answer ====\n")
-    # Typewriter if enabled
-    ui.typewriter(final)
-
-
-if __name__ == "__main__":
-    main() 

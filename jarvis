@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
-# JARVIS launcher script
-# Resolves the repository directory of this script and invokes jarvis.py
+# JARVIS launcher script (symlink-safe)
 set -euo pipefail
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec python3 "$SCRIPT_DIR/jarvis.py" "$@" 
+
+# Resolve the real path of this script, following symlinks (BSD/macOS compatible)
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  TARGET="$(readlink "$SOURCE")"
+  if [[ "$TARGET" == /* ]]; then
+    SOURCE="$TARGET"
+  else
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$DIR/$TARGET"
+  fi
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+
+exec python3 "$SCRIPT_DIR/cli/main.py" "$@" 
