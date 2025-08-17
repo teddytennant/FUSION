@@ -30,9 +30,23 @@ except Exception:
     import urllib.error
 
 
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+# --- Constants ---
 DEFAULT_LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 DEFAULT_RUN_LOG = os.path.join(DEFAULT_LOG_DIR, "runs.jsonl")
+
+# --- API Configuration ---
+# Using a dictionary to allow for easy expansion to other providers
+API_CONFIG = {
+    "openrouter": {
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "api_key_env": "OPENROUTER_API_KEY",
+    },
+    "gemini": {
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        "api_key_env": "GEMINI_API_KEY",
+    },
+    # Add other providers here, e.g., Anthropic, OpenAI directly
+}
 
 
 @dataclass
@@ -55,13 +69,13 @@ class GenerationResult:
 
 
 class Agent:
-    """Thin wrapper around OpenRouter's Chat Completions for a single model."""
+    """Wrapper for various LLM APIs, handling provider-specific logic."""
 
     def __init__(
         self,
         name: str,
         model: str,
-        api_key: str,
+        api_keys: Dict[str, str],
         max_retries: int = 3,
         timeout: int = 60,
         request_headers: Optional[Dict[str, str]] = None,
@@ -71,50 +85,70 @@ class Agent:
     ) -> None:
         self.name = name
         self.model = model
-        self.api_key = api_key
+        self.api_keys = api_keys
         self.max_retries = max_retries
         self.timeout = timeout
         self.request_headers = request_headers or {}
         self.default_system_prompt = default_system_prompt
         self.fallback_models = list(fallback_models or [])
         self.enable_mock_fallback = enable_mock_fallback
-        self.session = None
-        if requests is not None:
-            try:
-                self.session = requests.Session()
-            except Exception:
-                self.session = None
+        self.session = requests.Session() if requests else None
 
-    def _post(self, headers: Dict[str, str], payload: Dict[str, Any]) -> Tuple[int, str, Dict[str, Any]]:
-        """Send a POST request via requests (preferred) or urllib fallback."""
-        if requests is not None:
-            http = self.session or requests
-            resp = http.post(
-                url=OPENROUTER_API_URL,
-                headers=headers,
-                json=payload,
-                timeout=self.timeout,
-            )
-            status = resp.status_code
-            text = resp.text
-            data = resp.json() if status < 400 else {}
-            return status, text, data
-        req = urllib.request.Request(
-            OPENROUTER_API_URL,
-            data=json.dumps(payload).encode("utf-8"),
-            headers=headers,
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=self.timeout) as r:  # type: ignore
-            data = json.loads(r.read().decode("utf-8"))
-            status = 200
-            text = ""
-        return status, text, data
+    def _get_provider(self, model_name: str) -> str:
+        """Determine the provider from the model name."""
+        if "gemini" in model_name.lower():
+            return "gemini"
+        # Default to openrouter for any other model
+        return "openrouter"
+
+    def _get_api_key(self, provider: str) -> Optional[str]:
+        """Retrieve the API key for a given provider."""
+        return self.api_keys.get(provider)
+
+    def _post(self, model_name: str, headers: Dict[str, str], payload: Dict[str, Any]) -> Tuple[int, str, Dict[str, Any]]:
+        """Send a POST request, adapting to the provider's API format."""
+        provider = self._get_provider(model_name)
+        config = API_CONFIG.get(provider)
+        if not config:
+            raise ValueError(f"Provider '{provider}' not configured.")
+
+        api_key = self._get_api_key(provider)
+        if not api_key:
+            return 401, '{"error": "API key not found"}', {}
+
+        url = config["url"]
+        if provider == "gemini":
+            url = url.format(model=model_name) + f"?key={api_key}"
+            # Gemini has a different payload structure
+            gemini_payload = {"contents": [{"parts": [{"text": m["content"]}] for m in payload["messages"] if m["role"] == "user"}]}
+            payload = gemini_payload
+        else: # openrouter and others
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        if requests and self.session:
+            resp = self.session.post(url, headers=headers, json=payload, timeout=self.timeout)
+            return resp.status_code, resp.text, resp.json() if resp.ok else {}
+        
+        # Fallback to urllib
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            text = r.read().decode("utf-8")
+            return r.status, text, json.loads(text)
 
     @staticmethod
     def _build_mock_response(prompt: str, agent_name: str) -> str:
         summary = prompt.strip().split("\n")[0]
         summary = (summary[:140] + "…") if len(summary) > 140 else summary
+        
+        # Special handling for synthesizer
+        if "synthesizer" in agent_name.lower():
+            return (
+                f"[MOCK SYNTHESIS] This is a placeholder synthesis because the API key is missing or unavailable.\n"
+                f"Original query: {summary}\n"
+                "To get a real synthesized answer, provide a valid OPENROUTER_API_KEY with access to the requested models.\n"
+                "The synthesis would normally combine insights from all participating agents into a comprehensive response."
+            )
+        
         return (
             f"[MOCK] This is a placeholder response from {agent_name} because the API key is missing or unavailable.\n"
             f"Prompt snippet: {summary}\n"
@@ -139,13 +173,15 @@ class Agent:
             messages.extend(extra_messages)
         messages.append({"role": "user", "content": prompt})
 
+        provider = self._get_provider(self.model)
+        api_key = self._get_api_key(provider)
+
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
             **self.request_headers,
         }
 
-        if self.enable_mock_fallback and not (self.api_key and self.api_key.strip()):
+        if self.enable_mock_fallback and not (api_key and api_key.strip()):
             mock_text = self._build_mock_response(prompt, self.name)
             return GenerationResult(
                 content=mock_text,
@@ -170,7 +206,7 @@ class Agent:
             backoff = 1.0
             for attempt in range(1, self.max_retries + 1):
                 try:
-                    status, text, data = self._post(headers=headers, payload=payload)
+                    status, text, data = self._post(model_name=model_name, headers=headers, payload=payload)
                     if status >= 400:
                         txt_lower = text.lower()
                         if (
@@ -193,12 +229,19 @@ class Agent:
                             raw_response={"status": status, "text": text},
                             error=f"HTTP {status}: {text}",
                         )
-                    content = (
-                        data.get("choices", [{}])[0]
-                        .get("message", {})
-                        .get("content", "")
-                    )
-                    usage = data.get("usage", {})
+
+                    provider = self._get_provider(model_name)
+                    if provider == "gemini":
+                        # Extract content from Gemini's specific response structure
+                        content = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                        usage = {} # Gemini API doesn't provide usage stats in the same way
+                    else: # openrouter
+                        content = (
+                            data.get("choices", [{}])[0]
+                            .get("message", {})
+                            .get("content", "")
+                        )
+                        usage = data.get("usage", {})
                     return GenerationResult(content=content, usage=usage, raw_response=data)
                 except Exception as e:
                     last_err = str(e)
@@ -224,7 +267,7 @@ class Fusion:
 
     def __init__(
         self,
-        api_key: str,
+        api_keys: Dict[str, str],
         agents: List[AgentConfig],
         rounds: int = 3,
         max_tokens: int = 1000,
@@ -234,7 +277,7 @@ class Fusion:
         log_file: Optional[str] = None,
         seed: Optional[int] = None,
     ) -> None:
-        self.api_key = api_key
+        self.api_keys = api_keys
         self.rounds = rounds
         self.max_tokens = max_tokens
         self.temperature = temperature
@@ -245,7 +288,7 @@ class Fusion:
             Agent(
                 name=cfg.name,
                 model=cfg.model,
-                api_key=self.api_key,
+                api_keys=self.api_keys,
                 request_headers=self.request_headers,
                 default_system_prompt=self._build_system_prompt(cfg),
                 fallback_models=cfg.fallback_models,
@@ -257,7 +300,7 @@ class Fusion:
         self.synthesizer = Agent(
             name=f"Synthesizer({self.synthesizer_cfg.name})",
             model=self.synthesizer_cfg.model,
-            api_key=self.api_key,
+            api_keys=self.api_keys,
             request_headers=self.request_headers,
             default_system_prompt=(
                 "You are the synthesizer. Merge inputs into the single best answer, "
@@ -268,6 +311,10 @@ class Fusion:
         )
         self.logger = logging.getLogger("fusion")
         self.logger.setLevel(logging.INFO)
+        
+        # Clear any existing handlers to avoid duplicates
+        self.logger.handlers.clear()
+        
         if not log_file:
             os.makedirs(DEFAULT_LOG_DIR, exist_ok=True)
             log_file = DEFAULT_RUN_LOG
@@ -472,6 +519,10 @@ class Fusion:
     @staticmethod
     def _extract_refined(text: str) -> str:
         """Heuristic to extract the refined answer block from an agent's output."""
+        # Handle mock responses (they don't follow the refined answer format)
+        if text.startswith("[MOCK]"):
+            return text.strip()
+        
         lower = text.lower()
         marker = "refined answer:"
         if marker in lower:

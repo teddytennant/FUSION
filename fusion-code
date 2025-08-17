@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# JARVIS launcher script (symlink-safe)
+# FUSION Code CLI launcher script (symlink-safe)
 set -euo pipefail
 
 # Resolve the real path of this script, following symlinks (BSD/macOS compatible)
@@ -15,4 +15,13 @@ while [ -L "$SOURCE" ]; do
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 
-exec python3 "$SCRIPT_DIR/chat-cli/cli/main.py" "$@" 
+# Check if code-cli is built
+if [ ! -f "$SCRIPT_DIR/code-cli/dist/core/cli.js" ]; then
+  echo "FUSION Code CLI not built. Building now..."
+  cd "$SCRIPT_DIR/code-cli"
+  npm install
+  npm run build
+  cd "$SCRIPT_DIR"
+fi
+
+exec node "$SCRIPT_DIR/code-cli/dist/core/cli.js" "$@" 

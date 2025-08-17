@@ -2,6 +2,14 @@
 
 FUSION is a Python multi-agent chatbot framework that tethers multiple LLMs via the OpenRouter API to debate, review, and synthesize responses iteratively. It aims to produce answers that outperform individual models across various fields.
 
+## Project Structure
+
+FUSION is organized into three main components:
+
+- **`framework/`** - Core multi-agent framework and orchestration logic
+- **`chat-cli/`** - Multi-agent debate CLI for complex questions and discussions
+- **`code-cli/`** - Coding assistant CLI with file operations and development tools
+
 ## Features
 - Multiple agents (e.g., Gemini 2.5 Pro, Grok-4, DeepSeek) generate and iteratively refine answers
 - 2–3 review rounds with critique and refinement prompts
@@ -17,7 +25,7 @@ FUSION is a Python multi-agent chatbot framework that tethers multiple LLMs via 
 
 ## Requirements
 - Python 3.10+
-- An OpenRouter API key
+- An API key from a supported provider (e.g., OpenRouter, Google AI Studio).
 - `requests` (optional). If missing, Python's `urllib` is used automatically.
 - Optional: PyTorch for advanced features (currently not required)
 
@@ -25,40 +33,74 @@ FUSION is a Python multi-agent chatbot framework that tethers multiple LLMs via 
 ```bash
 git clone https://github.com/teddytennant/FUSION
 cd FUSION
+
+# Install chat CLI (multi-agent debate)
 sudo ln -s "$(pwd)/fusion" /usr/local/bin/fusion
+
+# Install code CLI (coding assistant)
+cd code-cli
+npm install
+npm run build
+npm link
+cd ..
 ```
 
 ## Quick Start
-### Onboarding flow (no shell exports)
+
+FUSION now includes two separate CLIs:
+
+### 1. Chat CLI (`fusion`) - Multi-Agent Debate
+For complex questions and debates using multiple AI agents.
+
+### 2. Code CLI (`fusion-code`) - Coding Assistant  
+For coding tasks and development with file operations.
+
+### Chat CLI Onboarding flow (no shell exports)
 ```bash
 fusion --onboard
 ```
-- Paste your `OPENROUTER_API_KEY` when prompted (hidden input).
-- Optionally save it to `.env` for future runs.
-- A quick connectivity check runs using non‑Llama models (with an optional last‑resort Llama check).
+- Paste your API keys when prompted (e.g., `OPENROUTER_API_KEY`, `GEMINI_API_KEY`).
+- Optionally save them to a `.env` file for future runs.
+- A quick connectivity check verifies that your keys can access the default models.
 - If you didn’t pass `--query`, you’ll be prompted to type one interactively.
 
-### Non‑interactive (environment or config file)
+### Chat CLI Non‑interactive (environment or config file)
 - Temporary for current shell:
   ```bash
   export OPENROUTER_API_KEY="sk-or-..."
+  export GEMINI_API_KEY="..."
   fusion --query "Explain quantum computing simply." --rounds 2 --temperature 0.6
   ```
+
+### Code CLI Usage
+```bash
+# Start coding session
+fusion-code
+
+# Use /login to set up your OpenRouter API key
+# Use /help to see available commands
+# Use tools to read, create, and edit files
+```
 - Persist to future shells (zsh):
   ```bash
-  echo 'export OPENROUTER_API_KEY="sk-or-..."' >> ~/.zshrc && source ~/.zshrc
+  echo 'export OPENROUTER_API_KEY="sk-or-..."' >> ~/.zshrc
+  echo 'export GEMINI_API_KEY="..."' >> ~/.zshrc && source ~/.zshrc
   ```
 - `.env` file (manual load):
   ```bash
   echo 'export OPENROUTER_API_KEY="sk-or-..."' > .env
+  echo 'export GEMINI_API_KEY="..."' >> .env
   source .env
   ```
 
 ## Alternative: Use a config file
-Provide the real key value in JSON (no env substitution inside the file):
+Provide API keys in the JSON configuration. Note that keys in the config file will override environment variables.
 ```json
 {
-  "api_key": "sk-or-...",
+  "api_keys": {
+    "openrouter": "sk-or-...",
+    "gemini": "..."
+  },
   "agents": [
     {"name": "Gemini 2.5 Pro", "model": "google/gemini-2.5-pro-preview", "role": "general reasoning"},
     {"name": "Grok-4", "model": "x-ai/grok-4", "role": "factual accuracy"},
