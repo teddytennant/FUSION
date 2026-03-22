@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# JARVIS launcher script (symlink-safe)
+# FUSION Chat CLI launcher script (symlink-safe)
 set -euo pipefail
 
 # Resolve the real path of this script, following symlinks (BSD/macOS compatible)
