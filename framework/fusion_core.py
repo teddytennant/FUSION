@@ -95,10 +95,16 @@ class Agent:
         self.session = requests.Session() if requests else None
 
     def _get_provider(self, model_name: str) -> str:
-        """Determine the provider from the model name."""
-        if "gemini" in model_name.lower():
+        """Determine the provider from the model name.
+
+        Models accessed via OpenRouter use slash-prefixed IDs like
+        ``google/gemini-2.5-pro-preview``.  We only route to the
+        native Gemini API when a bare model name (no slash) is used
+        *and* a Gemini API key is available.
+        """
+        if "/" not in model_name and "gemini" in model_name.lower() and self._get_api_key("gemini"):
             return "gemini"
-        # Default to openrouter for any other model
+        # Default to openrouter for any slash-prefixed or non-gemini model
         return "openrouter"
 
     def _get_api_key(self, provider: str) -> Optional[str]:
@@ -119,21 +125,40 @@ class Agent:
         url = config["url"]
         if provider == "gemini":
             url = url.format(model=model_name) + f"?key={api_key}"
-            # Gemini has a different payload structure
-            gemini_payload = {"contents": [{"parts": [{"text": m["content"]}] for m in payload["messages"] if m["role"] == "user"}]}
-            payload = gemini_payload
+            # Gemini API expects a list of content objects, one per message.
+            # System messages are mapped to role "model" as Gemini doesn't
+            # support a dedicated system role in the contents array.
+            role_map = {"system": "model", "assistant": "model", "user": "user"}
+            gemini_contents = []
+            for m in payload["messages"]:
+                role = role_map.get(m["role"], "user")
+                gemini_contents.append({
+                    "role": role,
+                    "parts": [{"text": m["content"]}],
+                })
+            payload = {"contents": gemini_contents}
         else: # openrouter and others
             headers["Authorization"] = f"Bearer {api_key}"
 
         if requests and self.session:
             resp = self.session.post(url, headers=headers, json=payload, timeout=self.timeout)
-            return resp.status_code, resp.text, resp.json() if resp.ok else {}
-        
+            data: Dict[str, Any] = {}
+            if resp.ok:
+                try:
+                    data = resp.json()
+                except Exception:
+                    pass
+            return resp.status_code, resp.text, data
+
         # Fallback to urllib
         req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=self.timeout) as r:
-            text = r.read().decode("utf-8")
-            return r.status, text, json.loads(text)
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                text = r.read().decode("utf-8")
+                return r.status, text, json.loads(text)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            return e.code, body, {}
 
     @staticmethod
     def _build_mock_response(prompt: str, agent_name: str) -> str:
