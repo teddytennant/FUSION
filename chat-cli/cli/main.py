@@ -6,10 +6,11 @@ This module implements the command-line interface for the FUSION framework.
 """
 
 import argparse
+import dataclasses
 import json
 import os
 import sys
-import logging
+import shlex
 from typing import Any, Dict, List, Optional, Tuple, Callable
 import getpass
 import threading
@@ -511,17 +512,52 @@ def build_default_config() -> Dict[str, Any]:
         "seed": None,
     }
 
+_AGENT_CONFIG_FIELDS = {f.name for f in dataclasses.fields(AgentConfig)}
+
+
+def merge_api_keys(base: Dict[str, str], overlay: Optional[Dict[str, str]]) -> Dict[str, str]:
+    """Deep-merge api_keys so a partial overlay never wipes existing providers.
+
+    A shallow dict ``update`` replaces the whole ``api_keys`` object, silently
+    dropping (for example) an env-loaded OPENROUTER_API_KEY when a config file
+    only specifies a gemini key. Only non-empty overlay values override.
+    """
+    merged = dict(base or {})
+    for provider, key in (overlay or {}).items():
+        if key:
+            merged[provider] = key
+    return merged
+
+
+def agent_config_from_dict(d: Dict[str, Any]) -> AgentConfig:
+    """Build an AgentConfig from a dict with a clear error on bad fields."""
+    if not isinstance(d, dict):
+        raise ValueError(f"Each agent config must be an object, got {type(d).__name__}.")
+    unknown = set(d) - _AGENT_CONFIG_FIELDS
+    if unknown:
+        raise ValueError(
+            f"Unknown agent config field(s): {sorted(unknown)}. "
+            f"Allowed: {sorted(_AGENT_CONFIG_FIELDS)}."
+        )
+    missing = {"name", "model"} - set(d)
+    if missing:
+        raise ValueError(f"Agent config missing required field(s): {sorted(missing)}.")
+    return AgentConfig(**d)
+
+
 def build_fusion_from_config(cfg: Dict[str, Any]) -> Fusion:
     """Merge user config with defaults and build the orchestrator."""
     merged = build_default_config()
-    merged.update({k: v for k, v in cfg.items() if v is not None})
+    # Deep-merge api_keys first so the shallow update below can't drop providers.
+    merged["api_keys"] = merge_api_keys(merged.get("api_keys", {}), cfg.get("api_keys"))
+    merged.update({k: v for k, v in cfg.items() if v is not None and k != "api_keys"})
 
     api_keys: Dict[str, str] = merged.get("api_keys") or {}
-    if not any(api_keys.values()):
+    if not any(v and str(v).strip() for v in api_keys.values()):
         raise RuntimeError("Missing API keys. Set at least one via onboarding, env, or config (e.g., OPENROUTER_API_KEY, GEMINI_API_KEY).")
 
-    agent_cfgs = [AgentConfig(**a) for a in merged.get("agents", [])]
-    synthesizer_cfg = AgentConfig(**merged["synthesizer"]) if merged.get("synthesizer") else None  # type: ignore
+    agent_cfgs = [agent_config_from_dict(a) for a in merged.get("agents", [])]
+    synthesizer_cfg = agent_config_from_dict(merged["synthesizer"]) if merged.get("synthesizer") else None  # type: ignore
 
     fusion = Fusion(
         api_keys=api_keys,
@@ -584,29 +620,49 @@ def run_single_query(fusion: Fusion, query: str, paper_mode: bool = False, ui: O
             label = event.get("label", "Progress")
             ui.print_progress_bar(current, total, label)
 
-    final_answer, _meta = fusion.debate(query=query, paper_mode=paper_mode, progress_callback=progress_callback)
+    try:
+        final_answer, _meta = fusion.debate(query=query, paper_mode=paper_mode, progress_callback=progress_callback)
+    finally:
+        # Ensure spinner/synth daemon threads are always stopped and the
+        # terminal restored, even if debate() raises mid-spinner.
+        if spinner_context is not None:
+            spinner_context.__exit__(None, None, None)
+        if synth_context is not None:
+            synth_context.__exit__(None, None, None)
     return final_answer
 
 def run_benchmark(fusion: Fusion, dataset_path: str, output_path: Optional[str]) -> None:
     """Load a simple dataset and evaluate queries sequentially."""
     with open(dataset_path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    assert isinstance(data, list), "Benchmark dataset must be a list of items."
+    # Explicit check (not assert: assertions are stripped under `python -O`).
+    if not isinstance(data, list):
+        raise ValueError("Benchmark dataset must be a JSON list of items.")
 
     results = []
+    degraded = 0
     for i, item in enumerate(data, start=1):
         prompt = item.get("prompt") or item.get("query")
         if not prompt:
             continue
         print(f"[Benchmark] {i}/{len(data)}: {prompt[:80]}...")
         answer, meta = fusion.debate(query=prompt, paper_mode=False)
+        is_degraded = bool(meta.get("any_mock"))
+        if is_degraded:
+            degraded += 1
+            print(f"  WARNING: item {item.get('id', i)} produced mock/degraded output "
+                  f"(missing/invalid API access) — not a real model answer.")
         results.append({
             "id": item.get("id", i),
             "prompt": prompt,
             "expected": item.get("expected"),
             "answer": answer,
+            "degraded": is_degraded,
             "meta": meta,
         })
+    if degraded:
+        print(f"\nWARNING: {degraded}/{len(results)} benchmark items were mock/degraded. "
+              f"Results are not trustworthy until API access is fixed.")
     if output_path:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(results, f, ensure_ascii=False, indent=2)
@@ -624,7 +680,11 @@ def prompt_for_api_keys_interactive() -> Dict[str, str]:
         try:
             key = getpass.getpass(prompt=prompt_text)
         except Exception:
-            key = input(prompt_text)
+            try:
+                key = input(prompt_text)
+            except EOFError:
+                # Non-interactive stdin (CI/pipe): can't onboard, stop asking.
+                break
         key = (key or "").strip()
         if key:
             api_keys[provider] = key
@@ -642,7 +702,10 @@ def maybe_save_env_vars(keys: Dict[str, str], env_path: str = ".env") -> None:
             with open(env_path, "a", encoding="utf-8") as f:
                 for provider, key in keys.items():
                     env_var = API_CONFIG[provider]['api_key_env']
-                    line = f'export {env_var}="{key}"\n'
+                    # shlex.quote prevents a key containing ", $, backticks, or
+                    # whitespace from breaking the file or being shell-expanded
+                    # when the user later `source`s it.
+                    line = f'export {env_var}={shlex.quote(key)}\n'
                     f.write(line)
             print(f"Saved to {env_path}. Next time, run: source {env_path}")
         except Exception as e:
@@ -739,7 +802,9 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     file_cfg = load_config(args.config)
     cfg = build_default_config()
-    cfg.update({k: v for k, v in file_cfg.items() if v is not None})
+    # Deep-merge api_keys so a partial config file can't wipe env-loaded keys.
+    cfg["api_keys"] = merge_api_keys(cfg.get("api_keys", {}), file_cfg.get("api_keys"))
+    cfg.update({k: v for k, v in file_cfg.items() if v is not None and k != "api_keys"})
 
     if not args.onboard:
         ui.print_ascii_header()
@@ -749,13 +814,13 @@ def main(argv: Optional[List[str]] = None) -> None:
             ui.print_status("Tip: Use --paper-mode for structured academic outputs", ui.COLOR_DIM)
             ui.print_separator("─", ui.COLOR_DIM)
 
-    api_keys_from_env = {
-        provider: os.getenv(config["api_key_env"], "")
-        for provider, config in API_CONFIG.items()
-    }
-    if args.onboard or not any(api_keys_from_env.values()):
+    # Gate onboarding on the merged keys (env + config file), not env alone, so
+    # a valid config-with-keys run isn't forced into interactive onboarding
+    # (which would crash on non-interactive stdin).
+    has_usable_key = any(v and str(v).strip() for v in cfg.get("api_keys", {}).values())
+    if args.onboard or not has_usable_key:
         keys = interactive_onboarding(ui)
-        cfg["api_keys"].update(keys)
+        cfg["api_keys"] = merge_api_keys(cfg.get("api_keys", {}), keys)
 
     if args.rounds is not None:
         cfg["rounds"] = args.rounds
@@ -767,21 +832,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     fusion = build_fusion_from_config(cfg)
 
     if args.log_file:
-        # Update the log file path if specified
+        # --log-file selects the JSONL run-log target. The human-readable
+        # logger stays on stderr (set up in Fusion.__init__) so it never
+        # collides with the stdout progress UI.
         fusion.run_log_path = args.log_file
-        # Remove existing file handler and add new one
-        for h in list(fusion.logger.handlers):
-            if isinstance(h, logging.FileHandler):
-                fusion.logger.removeHandler(h)
-        fh = logging.FileHandler(args.log_file)
-        fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-        fh.setFormatter(fmt)
-        fusion.logger.addHandler(fh)
-    else:
-        # Just update the stream handler output if needed
-        for h in fusion.logger.handlers:
-            if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
-                h.stream = sys.stderr if ui.enable_anim else sys.stdout
 
     if args.benchmark:
         run_benchmark(fusion, args.benchmark, args.benchmark_output)

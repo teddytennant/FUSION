@@ -9,9 +9,13 @@ This module contains the core classes for the FUSION framework, including:
 
 import json
 import os
+import re
 import sys
 import time
 import logging
+import urllib.parse
+import urllib.request
+import urllib.error
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Callable
 
@@ -21,13 +25,12 @@ try:
 except Exception:
     torch = None  # type: ignore
 
-# HTTP client: prefer requests if available, else fallback to urllib
+# HTTP client: prefer requests if available, else fall back to the
+# always-imported urllib (above).
 try:
     import requests  # type: ignore
 except Exception:
     requests = None  # type: ignore
-    import urllib.request
-    import urllib.error
 
 
 # --- Constants ---
@@ -111,6 +114,19 @@ class Agent:
         """Retrieve the API key for a given provider."""
         return self.api_keys.get(provider)
 
+    def _any_usable_key(self) -> bool:
+        """True if at least one candidate model (primary or fallback) has a key.
+
+        The mock short-circuit must consider fallback models, not just the
+        primary, otherwise a missing primary key would mask a perfectly good
+        fallback that routes to a different provider.
+        """
+        for model_name in [self.model] + self.fallback_models:
+            key = self._get_api_key(self._get_provider(model_name))
+            if key and key.strip():
+                return True
+        return False
+
     def _post(self, model_name: str, headers: Dict[str, str], payload: Dict[str, Any]) -> Tuple[int, str, Dict[str, Any]]:
         """Send a POST request, adapting to the provider's API format."""
         provider = self._get_provider(model_name)
@@ -122,9 +138,16 @@ class Agent:
         if not api_key:
             return 401, '{"error": "API key not found"}', {}
 
+        # Work on a per-request copy so an Authorization header for one provider
+        # is never carried over to a later (e.g. fallback) request to a
+        # different provider. Mutating the caller's shared dict would leak the
+        # OpenRouter bearer token into native-Gemini requests.
+        req_headers = dict(headers)
+        req_headers.pop("Authorization", None)
+
         url = config["url"]
         if provider == "gemini":
-            url = url.format(model=model_name) + f"?key={api_key}"
+            url = url.format(model=urllib.parse.quote(model_name, safe="")) + f"?key={urllib.parse.quote(api_key, safe='')}"
             # Gemini API expects a list of content objects, one per message.
             # System messages are mapped to role "model" as Gemini doesn't
             # support a dedicated system role in the contents array.
@@ -136,12 +159,20 @@ class Agent:
                     "role": role,
                     "parts": [{"text": m["content"]}],
                 })
-            payload = {"contents": gemini_contents}
-        else: # openrouter and others
-            headers["Authorization"] = f"Bearer {api_key}"
+            gemini_payload: Dict[str, Any] = {"contents": gemini_contents}
+            gen_config: Dict[str, Any] = {}
+            if payload.get("max_tokens") is not None:
+                gen_config["maxOutputTokens"] = payload["max_tokens"]
+            if payload.get("temperature") is not None:
+                gen_config["temperature"] = payload["temperature"]
+            if gen_config:
+                gemini_payload["generationConfig"] = gen_config
+            payload = gemini_payload
+        else:  # openrouter and others
+            req_headers["Authorization"] = f"Bearer {api_key}"
 
         if requests and self.session:
-            resp = self.session.post(url, headers=headers, json=payload, timeout=self.timeout)
+            resp = self.session.post(url, headers=req_headers, json=payload, timeout=self.timeout)
             data: Dict[str, Any] = {}
             if resp.ok:
                 try:
@@ -151,11 +182,15 @@ class Agent:
             return resp.status_code, resp.text, data
 
         # Fallback to urllib
-        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=req_headers, method="POST")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 text = r.read().decode("utf-8")
-                return r.status, text, json.loads(text)
+                try:
+                    data = json.loads(text)
+                except Exception:
+                    data = {}
+                return r.status, text, data
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
             return e.code, body, {}
@@ -198,15 +233,12 @@ class Agent:
             messages.extend(extra_messages)
         messages.append({"role": "user", "content": prompt})
 
-        provider = self._get_provider(self.model)
-        api_key = self._get_api_key(provider)
-
         headers = {
             "Content-Type": "application/json",
             **self.request_headers,
         }
 
-        if self.enable_mock_fallback and not (api_key and api_key.strip()):
+        if self.enable_mock_fallback and not self._any_usable_key():
             mock_text = self._build_mock_response(prompt, self.name)
             return GenerationResult(
                 content=mock_text,
@@ -233,41 +265,58 @@ class Agent:
                 try:
                     status, text, data = self._post(model_name=model_name, headers=headers, payload=payload)
                     if status >= 400:
-                        txt_lower = text.lower()
-                        if (
-                            status in (400, 404)
-                            and (
-                                "not a valid model id" in txt_lower
-                                or "no allowed providers" in txt_lower
-                            )
-                        ):
-                            last_err = f"Model unavailable: {model_name} ({status})"
-                            break
+                        # Retryable transient errors: raise to trigger backoff.
                         if status in (408, 409, 429) or 500 <= status < 600:
                             raise RuntimeError(f"HTTP {status}: {text}")
-                        if status in (401,):
+                        # Any other 4xx is non-retryable for this model. Record
+                        # the reason and advance to the next fallback model
+                        # rather than aborting the whole generation.
+                        txt_lower = text.lower()
+                        if status == 401:
                             last_err = f"Auth error ({status})"
-                            break
-                        return GenerationResult(
-                            content="",
-                            usage={},
-                            raw_response={"status": status, "text": text},
-                            error=f"HTTP {status}: {text}",
-                        )
+                        elif status in (400, 404) and (
+                            "not a valid model id" in txt_lower
+                            or "no allowed providers" in txt_lower
+                        ):
+                            last_err = f"Model unavailable: {model_name} ({status})"
+                        else:
+                            last_err = f"HTTP {status}: {text}"
+                        break
 
                     provider = self._get_provider(model_name)
                     if provider == "gemini":
-                        # Extract content from Gemini's specific response structure
-                        content = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                        usage = {} # Gemini API doesn't provide usage stats in the same way
-                    else: # openrouter
-                        content = (
-                            data.get("choices", [{}])[0]
-                            .get("message", {})
-                            .get("content", "")
-                        )
+                        # Gemini returns an empty/absent candidates list on
+                        # safety blocks, and candidates without "parts" on
+                        # RECITATION/MAX_TOKENS. Treat both as a failed call so
+                        # we fall back instead of crashing or returning "".
+                        candidates = data.get("candidates") or []
+                        if not candidates:
+                            block = data.get("promptFeedback") or text[:200]
+                            last_err = f"Gemini returned no candidates for {model_name}: {block}"
+                            break
+                        parts = (candidates[0].get("content") or {}).get("parts") or []
+                        content = parts[0].get("text", "") if parts else ""
+                        if not content:
+                            # finishReason SAFETY/RECITATION/MAX_TOKENS yields a
+                            # candidate with no usable text. Treat as a failed
+                            # call so we fall back rather than return "".
+                            finish = candidates[0].get("finishReason")
+                            last_err = f"Gemini returned empty content for {model_name} (finishReason={finish})"
+                            break
+                        usage = {}  # Gemini API doesn't provide usage stats in the same way
+                    else:  # openrouter
+                        # OpenRouter sometimes returns HTTP 200 with an
+                        # {"error": ...} body and no choices.
+                        choices = data.get("choices") or []
+                        if not choices:
+                            err = data.get("error") or text[:200]
+                            last_err = f"No choices returned for {model_name}: {err}"
+                            break
+                        content = (choices[0].get("message") or {}).get("content")
                         usage = data.get("usage", {})
-                    return GenerationResult(content=content, usage=usage, raw_response=data)
+                    # Coerce a null/absent content to "" so downstream string
+                    # operations (strip/len) never hit a None.
+                    return GenerationResult(content=content or "", usage=usage, raw_response=data)
                 except Exception as e:
                     last_err = str(e)
                     if attempt < self.max_retries:
@@ -302,6 +351,15 @@ class Fusion:
         log_file: Optional[str] = None,
         seed: Optional[int] = None,
     ) -> None:
+        if not agents:
+            raise ValueError("Fusion requires at least one agent.")
+        names = [cfg.name for cfg in agents]
+        duplicates = sorted({n for n in names if names.count(n) > 1})
+        if duplicates:
+            raise ValueError(
+                f"Agent names must be unique; debate state is keyed by name. "
+                f"Duplicate name(s): {duplicates}"
+            )
         self.api_keys = api_keys
         self.rounds = rounds
         self.max_tokens = max_tokens
@@ -334,22 +392,31 @@ class Fusion:
             fallback_models=self.synthesizer_cfg.fallback_models,
             enable_mock_fallback=True,
         )
-        self.logger = logging.getLogger("fusion")
+        # Per-instance logger so multiple Fusion objects don't share (and
+        # repeatedly clear) a process-global logger's handlers, which leaked
+        # file descriptors. Log to stderr so human-readable lines never
+        # collide with the progress UI written to stdout.
+        self.logger = logging.getLogger(f"fusion.{id(self)}")
         self.logger.setLevel(logging.INFO)
-        
-        # Clear any existing handlers to avoid duplicates
-        self.logger.handlers.clear()
-        
+        self.logger.propagate = False
+        for h in list(self.logger.handlers):
+            h.close()
+            self.logger.removeHandler(h)
+
         if not log_file:
             os.makedirs(DEFAULT_LOG_DIR, exist_ok=True)
             log_file = DEFAULT_RUN_LOG
-        fh = logging.FileHandler(log_file)
-        sh = logging.StreamHandler(sys.stdout)
+        sh = logging.StreamHandler(sys.stderr)
+        # Only surface warnings/errors on the console; INFO progress is already
+        # shown via the progress callback (and the JSONL run log captures the
+        # full detail), so emitting it here would just clutter the terminal.
+        sh.setLevel(logging.WARNING)
         fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-        fh.setFormatter(fmt)
         sh.setFormatter(fmt)
-        self.logger.addHandler(fh)
         self.logger.addHandler(sh)
+        # The structured JSONL run log is written directly by _log_jsonl; it is
+        # deliberately NOT a logging FileHandler target, which would interleave
+        # human-readable lines into the JSONL and corrupt it.
         self.run_log_path = log_file
 
     @staticmethod
@@ -431,17 +498,28 @@ class Fusion:
         self._warn_costs(prompts_for_warn)
 
         agent_latest: Dict[str, str] = {k: v.content for k, v in initial_outputs.items()}
+        # Track which agents produced mock/placeholder output so it can be kept
+        # out of other agents' review context and the final synthesis.
+        agent_is_mock: Dict[str, bool] = {k: v.is_mock for k, v in initial_outputs.items()}
         for r in range(1, self.rounds + 1):
             round_label = f"Review round {r}/{self.rounds}"
             if progress_callback:
                 progress_callback({"type": "status", "message": round_label})
             self.logger.info(f"Review round {r}/{self.rounds}...")
             new_outputs: Dict[str, str] = {}
+            new_is_mock: Dict[str, bool] = {}
             prompts_for_warn = []
             for agent in self.agents:
                 if progress_callback:
                     progress_callback({"type": "spinner_start", "message": f"Review • {agent.name}"})
-                others = {name: content for name, content in agent_latest.items() if name != agent.name}
+                # Don't feed mock/empty contributions to the reviewing agent —
+                # asking a real model to critique placeholder text poisons the
+                # debate.
+                others = {
+                    name: content
+                    for name, content in agent_latest.items()
+                    if name != agent.name and content.strip() and not agent_is_mock.get(name, False)
+                }
                 prompt = self._build_review_prompt(
                     query=query,
                     self_response=agent_latest.get(agent.name, ""),
@@ -458,6 +536,7 @@ class Fusion:
                 )
                 refined = self._extract_refined(res.content)
                 new_outputs[agent.name] = refined
+                new_is_mock[agent.name] = res.is_mock
                 self._log_jsonl({
                     "phase": f"review_{r}",
                     "agent": agent.name,
@@ -473,12 +552,23 @@ class Fusion:
                     progress_callback({"type": "endline", "ok": bool(refined.strip()), "message": f"Review • {agent.name} ({len(refined)} chars)"})
                 self.logger.info(f"{agent.name} refined output ({len(refined)} chars)")
             agent_latest = new_outputs
+            agent_is_mock = new_is_mock
             self._warn_costs(prompts_for_warn)
 
         if progress_callback:
             progress_callback({"type": "synth_start", "message": "Synthesizing"})
         self.logger.info("Synthesizing final answer...")
-        synth_prompt = self._build_synthesis_prompt(query, agent_latest, paper_mode)
+        # Synthesize only over genuine, non-empty contributions. If every agent
+        # degraded, fall back to whatever we have so the run still produces a
+        # (clearly flagged) result rather than synthesizing over nothing.
+        synth_inputs = {
+            name: content
+            for name, content in agent_latest.items()
+            if content.strip() and not agent_is_mock.get(name, False)
+        }
+        if not synth_inputs:
+            synth_inputs = agent_latest
+        synth_prompt = self._build_synthesis_prompt(query, synth_inputs, paper_mode)
         synth_res = self.synthesizer.generate(
             prompt=synth_prompt,
             max_tokens=self.max_tokens,
@@ -504,6 +594,11 @@ class Fusion:
 
         run_meta["final_answer"] = final_answer
         run_meta["final_usage"] = synth_res.usage
+        # Machine-readable degradation flags so non-interactive callers (e.g.
+        # the benchmark runner) can tell a real synthesis from a mock/empty one.
+        run_meta["agent_is_mock"] = agent_is_mock
+        run_meta["is_mock"] = synth_res.is_mock
+        run_meta["any_mock"] = synth_res.is_mock or any(agent_is_mock.values())
         return final_answer, run_meta
 
     @staticmethod
@@ -541,18 +636,29 @@ class Fusion:
             "- Refined Answer: <your improved answer>\n"
         )
 
+    # Match a "Refined Answer:" header only at the start of a line, tolerating
+    # leading bullets/markdown bold, so an in-sentence mention inside a critique
+    # ("...my refined answer:...") doesn't get mistaken for the header.
+    _REFINED_MARKER_RE = re.compile(
+        r"^[ \t]*[-*]?[ \t]*\**[ \t]*refined answer[ \t]*\**[ \t]*:[ \t]*\**[ \t]*",
+        re.IGNORECASE | re.MULTILINE,
+    )
+
     @staticmethod
     def _extract_refined(text: str) -> str:
         """Heuristic to extract the refined answer block from an agent's output."""
-        # Handle mock responses (they don't follow the refined answer format)
-        if text.startswith("[MOCK]"):
+        if not text:
+            return ""
+        # Mock responses (any variant: "[MOCK]", "[MOCK SYNTHESIS]") don't
+        # follow the refined-answer format; pass them through unchanged.
+        if text.lstrip().startswith("[MOCK"):
             return text.strip()
-        
-        lower = text.lower()
-        marker = "refined answer:"
-        if marker in lower:
-            idx = lower.index(marker) + len(marker)
-            return text[idx:].strip()
+
+        matches = list(Fusion._REFINED_MARKER_RE.finditer(text))
+        if matches:
+            # Use the last header so a real "Refined Answer:" block wins over an
+            # earlier in-critique reference.
+            return text[matches[-1].end():].strip()
         return text.strip()
 
     @staticmethod

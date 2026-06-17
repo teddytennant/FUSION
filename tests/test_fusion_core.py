@@ -261,6 +261,33 @@ class TestFusionHelpers(unittest.TestCase):
         result = Fusion._extract_refined(text)
         self.assertEqual(result, "[MOCK] This is a mock response.")
 
+    def test_extract_refined_mock_synthesis_response(self):
+        text = "[MOCK SYNTHESIS] placeholder synthesis."
+        result = Fusion._extract_refined(text)
+        self.assertEqual(result, "[MOCK SYNTHESIS] placeholder synthesis.")
+
+    def test_extract_refined_ignores_in_critique_mention(self):
+        """An in-sentence 'refined answer:' must not be mistaken for the header."""
+        text = (
+            "Critique: I will now give my refined answer: it was weak.\n"
+            "Refined Answer: The real refined content."
+        )
+        result = Fusion._extract_refined(text)
+        self.assertEqual(result, "The real refined content.")
+
+    def test_extract_refined_markdown_header(self):
+        text = "Critique: blah\n**Refined Answer:** the markdown answer"
+        result = Fusion._extract_refined(text)
+        self.assertEqual(result, "the markdown answer")
+
+    def test_extract_refined_bulleted_header(self):
+        text = "- Critique: blah\n- Refined Answer: bulleted answer"
+        result = Fusion._extract_refined(text)
+        self.assertEqual(result, "bulleted answer")
+
+    def test_extract_refined_empty_string(self):
+        self.assertEqual(Fusion._extract_refined(""), "")
+
     def test_build_initial_prompt_normal(self):
         prompt = Fusion._build_initial_prompt("What is AI?", paper_mode=False)
         self.assertIn("What is AI?", prompt)
