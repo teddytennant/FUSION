@@ -19,12 +19,6 @@ import urllib.error
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Callable
 
-# Optional torch import for advanced features (e.g., cosine similarity)
-try:
-    import torch  # noqa: F401
-except Exception:
-    torch = None  # type: ignore
-
 # HTTP client: prefer requests if available, else fall back to the
 # always-imported urllib (above).
 try:
@@ -38,7 +32,8 @@ DEFAULT_LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 DEFAULT_RUN_LOG = os.path.join(DEFAULT_LOG_DIR, "runs.jsonl")
 
 # --- API Configuration ---
-# Using a dictionary to allow for easy expansion to other providers
+# Provider -> endpoint + the env var its API key is read from. Add new
+# providers here; _get_provider routes model names to one of these.
 API_CONFIG = {
     "openrouter": {
         "url": "https://openrouter.ai/api/v1/chat/completions",
@@ -48,7 +43,6 @@ API_CONFIG = {
         "url": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         "api_key_env": "GEMINI_API_KEY",
     },
-    # Add other providers here, e.g., Anthropic, OpenAI directly
 }
 
 

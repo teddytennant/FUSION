@@ -31,18 +31,19 @@ from framework.fusion_core import (
 )
 
 class TerminalUI:
-    """Enhanced terminal UI with rich animations, progress bars, and engaging visuals."""
+    """Terminal UI: ANSI-colored status lines, spinners, and a typewriter
+    final-answer renderer. All effects degrade to plain text when stdout is not
+    a TTY or when --no-ansi/--no-anim is passed."""
 
-    # Enhanced spinner frames with more variety
     SPINNER_FRAMES = [
-        "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",  # Braille spinners
-        "◐", "◑", "◒", "◓",  # Circle spinners
-        "◢", "◣", "◤", "◥",  # Triangle spinners
-        "▌", "▐", "▌", "▐",  # Bar spinners
-        "▉", "▊", "▋", "▌", "▍", "▎", "▏", "▎", "▍", "▌", "▋", "▊",  # Progress spinners
+        "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
+        "◐", "◑", "◒", "◓",
+        "◢", "◣", "◤", "◥",
+        "▌", "▐", "▌", "▐",
+        "▉", "▊", "▋", "▌", "▍", "▎", "▏", "▎", "▍", "▌", "▋", "▊",
     ]
-    
-    # Clean status icons (minimal emojis)
+
+    # Status icons, matched to message content in print_status/endline.
     TICK = "✓"
     CROSS = "✗"
     WARNING = "!"
@@ -58,23 +59,17 @@ class TerminalUI:
         self.enable_ansi = enable_ansi and sys.stdout.isatty()
         self.enable_anim = enable_anim and sys.stdout.isatty()
         self.typewriter_ms = max(0, int(typewriter_ms))
-        
-        # Enhanced color palette
+
+        # ANSI escapes (empty strings when color is disabled, so callers can
+        # interpolate them unconditionally).
         self.COLOR_RESET = "\x1b[0m" if self.enable_ansi else ""
         self.COLOR_DIM = "\x1b[2m" if self.enable_ansi else ""
         self.COLOR_BOLD = "\x1b[1m" if self.enable_ansi else ""
-        self.COLOR_UNDERLINE = "\x1b[4m" if self.enable_ansi else ""
-        
-        # Basic colors
+
         self.COLOR_CYAN = "\x1b[36m" if self.enable_ansi else ""
-        self.COLOR_GREEN = "\x1b[32m" if self.enable_ansi else ""
-        self.COLOR_RED = "\x1b[31m" if self.enable_ansi else ""
-        self.COLOR_YELLOW = "\x1b[33m" if self.enable_ansi else ""
         self.COLOR_MAGENTA = "\x1b[35m" if self.enable_ansi else ""
         self.COLOR_BLUE = "\x1b[34m" if self.enable_ansi else ""
-        self.COLOR_WHITE = "\x1b[37m" if self.enable_ansi else ""
-        
-        # Bright colors
+
         self.COLOR_BRIGHT_CYAN = "\x1b[96m" if self.enable_ansi else ""
         self.COLOR_BRIGHT_GREEN = "\x1b[92m" if self.enable_ansi else ""
         self.COLOR_BRIGHT_RED = "\x1b[91m" if self.enable_ansi else ""
@@ -82,23 +77,14 @@ class TerminalUI:
         self.COLOR_BRIGHT_MAGENTA = "\x1b[95m" if self.enable_ansi else ""
         self.COLOR_BRIGHT_BLUE = "\x1b[94m" if self.enable_ansi else ""
         self.COLOR_BRIGHT_WHITE = "\x1b[97m" if self.enable_ansi else ""
-        
-        # Background colors
-        self.BG_CYAN = "\x1b[46m" if self.enable_ansi else ""
-        self.BG_GREEN = "\x1b[42m" if self.enable_ansi else ""
-        self.BG_RED = "\x1b[41m" if self.enable_ansi else ""
-        self.BG_YELLOW = "\x1b[43m" if self.enable_ansi else ""
-        self.BG_MAGENTA = "\x1b[45m" if self.enable_ansi else ""
-        self.BG_BLUE = "\x1b[44m" if self.enable_ansi else ""
 
     def _println(self, text: str = "") -> None:
         sys.stdout.write(text + ("\n" if not text.endswith("\n") else ""))
         sys.stdout.flush()
 
     def print_status(self, text: str, color: Optional[str] = None) -> None:
-        """Enhanced status printing with contextual icons and better formatting."""
+        """Print a status line, picking an icon/color from keywords in the text."""
         if self.enable_ansi:
-            # Add contextual icons based on message content
             icon = ""
             if "starting" in text.lower():
                 icon = f"{self.ROCKET} "
@@ -125,65 +111,7 @@ class TerminalUI:
             self._println(f"{color}{icon}{text}{self.COLOR_RESET}")
         else:
             self._println(text)
-            
-    def print_progress_bar(self, current: int, total: int, label: str = "Progress", width: int = 40) -> None:
-        """Display a colorful progress bar."""
-        if not self.enable_ansi:
-            percentage = (current / total) * 100
-            self._println(f"{label}: {percentage:.1f}%")
-            return
-            
-        percentage = current / total
-        filled_width = int(width * percentage)
-        bar = "█" * filled_width + "░" * (width - filled_width)
-        
-        # Color gradient based on progress
-        if percentage < 0.3:
-            color = self.COLOR_BRIGHT_RED
-        elif percentage < 0.7:
-            color = self.COLOR_BRIGHT_YELLOW
-        else:
-            color = self.COLOR_BRIGHT_GREEN
-            
-        percentage_text = f"{percentage * 100:.1f}%"
-        self._println(f"{self.COLOR_CYAN}{label}:{self.COLOR_RESET} [{color}{bar}{self.COLOR_RESET}] {percentage_text}")
-        
-    def print_agent_info(self, agent_name: str, model: str, status: str = "active") -> None:
-        """Display agent information in an engaging format."""
-        if not self.enable_ansi:
-            self._println(f"Agent: {agent_name} ({model}) - {status}")
-            return
-            
-        # Agent-specific icons and colors
-        agent_icons = {
-            "gemini": "●",
-            "grok": "~",
-            "deepseek": "○",
-            "synthesizer": "◇",
-            "default": "●"
-        }
-        
-        agent_colors = {
-            "gemini": self.COLOR_BRIGHT_CYAN,
-            "grok": self.COLOR_BRIGHT_RED,
-            "deepseek": self.COLOR_BRIGHT_BLUE,
-            "synthesizer": self.COLOR_BRIGHT_MAGENTA,
-            "default": self.COLOR_BRIGHT_GREEN
-        }
-        
-        # Find matching agent type
-        agent_type = "default"
-        for key in agent_icons:
-            if key in agent_name.lower():
-                agent_type = key
-                break
-                
-        icon = agent_icons[agent_type]
-        color = agent_colors[agent_type]
-        status_color = self.COLOR_BRIGHT_GREEN if status == "active" else self.COLOR_BRIGHT_RED
-        
-        self._println(f"{icon} {color}{agent_name}{self.COLOR_RESET} ({self.COLOR_DIM}{model}{self.COLOR_RESET}) - {status_color}{status}{self.COLOR_RESET}")
-        
+
     def print_separator(self, char: str = "═", color: Optional[str] = None) -> None:
         """Print a decorative separator line."""
         width = min(80, self._term_width())
@@ -200,7 +128,7 @@ class TerminalUI:
             return 80
 
     def prompt_box(self, title: str = "FUSION", prompt_label: str = "Enter your query") -> str:
-        """Draw an enhanced stylish box for input with better visual design."""
+        """Draw a bordered input box with a centered title and read one line."""
         width = min(100, self._term_width() - 2)
         inner_w = width - 2
         title_len = len(title) + 2
@@ -208,7 +136,6 @@ class TerminalUI:
         title_pad_right = inner_w - title_len - title_pad_left
 
         if self.enable_ansi:
-            # Enhanced title with clean styling
             title_text = f" {self.COLOR_BRIGHT_YELLOW}{self.COLOR_BOLD}{title}{self.COLOR_RESET}{self.COLOR_CYAN} "
             top = self.COLOR_CYAN + "╔" + "═" * title_pad_left + title_text + "═" * title_pad_right + "╗" + self.COLOR_RESET
             bottom = self.COLOR_CYAN + "╚" + "═" * inner_w + "╝" + self.COLOR_RESET
@@ -228,31 +155,27 @@ class TerminalUI:
 
     @contextmanager
     def spinner(self, label: str):
-        """Enhanced context manager spinner with dynamic colors and better visual feedback."""
+        """Animate a spinner next to `label` on a daemon thread until the
+        context exits, then clear the line. No-op when animation is disabled."""
         stop = threading.Event()
         start_time = time.time()
-        
+
         def run() -> None:
             i = 0
-            colors = [self.COLOR_CYAN, self.COLOR_BRIGHT_CYAN, self.COLOR_BLUE, self.COLOR_BRIGHT_BLUE, 
+            colors = [self.COLOR_CYAN, self.COLOR_BRIGHT_CYAN, self.COLOR_BLUE, self.COLOR_BRIGHT_BLUE,
                      self.COLOR_MAGENTA, self.COLOR_BRIGHT_MAGENTA]
-            
+
             while not stop.is_set():
                 if self.enable_anim:
                     frame = self.SPINNER_FRAMES[i % len(self.SPINNER_FRAMES)]
                     color = colors[i % len(colors)]
-                    
-                    # Add elapsed time for longer operations
                     elapsed = time.time() - start_time
                     time_str = f" ({elapsed:.1f}s)" if elapsed > 1.0 else ""
-                    
-                    # Add subtle pulse effect
                     pulse = " " if i % 2 == 0 else "·"
-                    
                     sys.stdout.write(f"\r{color}{frame}{self.COLOR_RESET} {label}{time_str}{pulse}")
                     sys.stdout.flush()
                     i += 1
-                time.sleep(0.08)  # Slightly faster for more responsive feel
+                time.sleep(0.08)
 
         t: Optional[threading.Thread] = None
         if self.enable_anim:
@@ -265,17 +188,16 @@ class TerminalUI:
             if t is not None:
                 t.join(timeout=0.2)
             if self.enable_anim:
-                # Clear the line with a smooth transition
                 sys.stdout.write("\r" + " " * 80 + "\r")
                 sys.stdout.flush()
 
     @contextmanager
     def synth_progress(self, label: str = "Synthesizing"):
-        """Enhanced fusion-themed progress animation with particle effects."""
+        """Spinner variant for the synthesis step: a converging/exploding
+        particle animation. Same lifecycle as spinner()."""
         stop = threading.Event()
         start_time = time.time()
-        
-        # Elegant fusion frames with particle effects
+
         fusion_frames = [
             "        ••        ",
             "      »»••««      ",
@@ -307,29 +229,18 @@ class TerminalUI:
                 if self.enable_anim:
                     frame = fusion_frames[i % len(fusion_frames)]
                     if self.enable_ansi:
-                        # Elegant color mapping for particle effects
+                        # Colorize only the glyphs the frames actually contain.
                         frame = frame.replace("•", f"{self.COLOR_BRIGHT_YELLOW}•{self.COLOR_RESET}")
-                        frame = frame.replace("○", f"{self.COLOR_BRIGHT_CYAN}○{self.COLOR_RESET}")
                         frame = frame.replace("~", f"{self.COLOR_BRIGHT_RED}~{self.COLOR_RESET}")
-                        frame = frame.replace("·", f"{self.COLOR_BRIGHT_MAGENTA}·{self.COLOR_RESET}")
-                        frame = frame.replace("=", f"{self.COLOR_BRIGHT_RED}={self.COLOR_RESET}")
                         frame = frame.replace("*", f"{self.COLOR_BRIGHT_MAGENTA}*{self.COLOR_RESET}")
-                        frame = frame.replace("-", f"{self.COLOR_CYAN}-{self.COLOR_RESET}")
-                        frame = frame.replace("<", f"{self.COLOR_BLUE}<{self.COLOR_RESET}")
-                        frame = frame.replace(">", f"{self.COLOR_BLUE}>{self.COLOR_RESET}")
-                        frame = frame.replace("|", f"{self.COLOR_WHITE}|{self.COLOR_RESET}")
                         frame = frame.replace(".", f"{self.COLOR_DIM}.{self.COLOR_RESET}")
                         frame = frame.replace("»", f"{self.COLOR_CYAN}»{self.COLOR_RESET}")
                         frame = frame.replace("«", f"{self.COLOR_CYAN}«{self.COLOR_RESET}")
                         frame = frame.replace("💥", f"{self.COLOR_BRIGHT_YELLOW}💥{self.COLOR_RESET}")
 
-                    # Add elapsed time and progress indicator
                     elapsed = time.time() - start_time
                     time_str = f" ({elapsed:.1f}s)"
-                    
-                    # Add a subtle pulse effect
                     pulse = " ·" if i % 4 == 0 else "  "
-                    
                     sys.stdout.write(f"\r{self.COLOR_BRIGHT_BLUE}{label}{self.COLOR_RESET}{time_str} {frame}{pulse}")
                     sys.stdout.flush()
                     i += 1
@@ -346,16 +257,14 @@ class TerminalUI:
             if t is not None:
                 t.join(timeout=0.2)
             if self.enable_anim:
-                # Clear with a completion effect
                 sys.stdout.write("\r" + " " * 100 + "\r")
                 sys.stdout.flush()
 
     def endline(self, ok: bool, text: str) -> None:
-        """Enhanced status line with better visual feedback and contextual icons."""
+        """Print a completed step line with a check/cross and a keyword icon."""
         if ok:
             icon = self.TICK
             color = self.COLOR_BRIGHT_GREEN
-            # Add contextual icons based on text content
             if "initial" in text.lower():
                 icon = f"{self.ROCKET} {self.TICK}"
             elif "review" in text.lower():
@@ -371,15 +280,14 @@ class TerminalUI:
         else:
             icon = self.CROSS
             color = self.COLOR_BRIGHT_RED
-            
+
         if self.enable_ansi:
-            # Add a subtle animation effect
             self._println(f"{color}{icon}{self.COLOR_RESET} {text}")
         else:
             self._println(f"{icon} {text}")
 
     def print_ascii_header(self) -> None:
-        """Render an enhanced FUSION ASCII banner with dynamic colors and effects."""
+        """Render the FUSION ASCII banner and subtitle."""
         header = r'''
 ███████╗██╗   ██╗███████╗██╗ ██████╗ ███╗   ██╗
 ██╔════╝██║   ██║██╔════╝██║██╔═══██╗████╗  ██║
@@ -392,24 +300,19 @@ class TerminalUI:
         tagline = " Multi-Agent AI Debate & Synthesis Engine"
         
         if self.enable_ansi:
-            # Create a rainbow effect across the header
             colors = [
                 self.COLOR_BRIGHT_MAGENTA, self.COLOR_BRIGHT_CYAN, self.COLOR_BRIGHT_BLUE,
                 self.COLOR_BRIGHT_GREEN, self.COLOR_BRIGHT_YELLOW, self.COLOR_BRIGHT_RED
             ]
-            
             lines = header.split('\n')
             for i, line in enumerate(lines):
                 if line.strip():
-                    # Create a gradient effect
                     color = colors[i % len(colors)]
                     self._println(f"{color}{line}{self.COLOR_RESET}")
-            
-            # Enhanced subtitle with glow effect
+
             self._println(f"{self.COLOR_BRIGHT_YELLOW}{self.COLOR_BOLD}{subtitle}{self.COLOR_RESET}")
             self._println(f"{self.COLOR_CYAN}{tagline}{self.COLOR_RESET}")
-            
-            # Add a decorative line
+
             width = min(80, self._term_width())
             decorative = "═" * width
             self._println(f"{self.COLOR_DIM}{decorative}{self.COLOR_RESET}")
@@ -419,38 +322,35 @@ class TerminalUI:
             self._println(tagline)
 
     def typewriter(self, text: str) -> None:
-        """Enhanced typewriter effect with better visual feedback and cursor animation."""
+        """Print `text` char-by-char with a blinking cursor when typewriter_ms>0;
+        otherwise print it in one shot."""
         if not self.enable_anim or self.typewriter_ms <= 0:
             if self.enable_ansi:
-                # Add a subtle highlight effect
                 self._println(f"{self.COLOR_BRIGHT_GREEN}{text}{self.COLOR_RESET}")
             else:
                 self._println(text)
             return
-            
+
         delay = self.typewriter_ms / 1000.0
         cursor_frames = ["▌", "▐", "▌", "▐"]
         cursor_i = 0
-        
+
         if self.enable_ansi:
             sys.stdout.write(self.COLOR_BRIGHT_GREEN)
-            
+
         for i, ch in enumerate(text):
             sys.stdout.write(ch)
-            
-            # Add animated cursor
-            if i % 10 == 0:  # Update cursor every 10 characters
+            if i % 10 == 0:
                 cursor = cursor_frames[cursor_i % len(cursor_frames)]
                 sys.stdout.write(f"{self.COLOR_BRIGHT_YELLOW}{cursor}{self.COLOR_BRIGHT_GREEN}")
-                sys.stdout.write("\b")  # Move back to overwrite cursor
+                sys.stdout.write("\b")  # overwrite the cursor on the next char
                 cursor_i += 1
-                
             sys.stdout.flush()
             time.sleep(delay)
-            
+
         if self.enable_ansi:
             sys.stdout.write(self.COLOR_RESET)
-            
+
         if not text.endswith("\n"):
             sys.stdout.write("\n")
         sys.stdout.flush()
@@ -588,7 +488,6 @@ def run_single_query(fusion: Fusion, query: str, paper_mode: bool = False, ui: O
         if event_type == "status":
             ui.print_status(message, color=event.get("color"))
         elif event_type == "spinner_start":
-            # Add a subtle separator before starting new operations
             if "initial" in message.lower() or "review" in message.lower():
                 ui.print_separator("─", ui.COLOR_DIM)
             spinner_context = ui.spinner(message)
@@ -607,18 +506,6 @@ def run_single_query(fusion: Fusion, query: str, paper_mode: bool = False, ui: O
                 synth_context = None
         elif event_type == "endline":
             ui.endline(event.get("ok", False), message)
-        elif event_type == "agent_info":
-            # New event type for displaying agent information
-            agent_name = event.get("agent_name", "")
-            model = event.get("model", "")
-            status = event.get("status", "active")
-            ui.print_agent_info(agent_name, model, status)
-        elif event_type == "progress":
-            # New event type for progress bars
-            current = event.get("current", 0)
-            total = event.get("total", 1)
-            label = event.get("label", "Progress")
-            ui.print_progress_bar(current, total, label)
 
     try:
         final_answer, _meta = fusion.debate(query=query, paper_mode=paper_mode, progress_callback=progress_callback)
@@ -808,7 +695,6 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     if not args.onboard:
         ui.print_ascii_header()
-        # Add a welcome message
         if ui.enable_ansi:
             ui.print_status("Welcome to FUSION! Ready to orchestrate multi-agent debates.", ui.COLOR_BRIGHT_CYAN)
             ui.print_status("Tip: Use --paper-mode for structured academic outputs", ui.COLOR_DIM)
@@ -856,18 +742,16 @@ def main(argv: Optional[List[str]] = None) -> None:
         args.query = q
 
     final = run_single_query(fusion, args.query, paper_mode=args.paper_mode, ui=ui)
-    
-    # Enhanced final answer display
+
     if ui.enable_ansi:
         ui.print_separator("═", ui.COLOR_BRIGHT_GREEN)
         ui.print_status("FUSION Final Answer", ui.COLOR_BRIGHT_GREEN)
         ui.print_separator("═", ui.COLOR_BRIGHT_GREEN)
     else:
         print("\n==== FUSION Final Answer ====\n")
-    
+
     ui.typewriter(final)
-    
-    # Add completion message
+
     if ui.enable_ansi:
         ui.print_separator("─", ui.COLOR_DIM)
         ui.print_status("Debate complete! The agents have synthesized their insights.", ui.COLOR_BRIGHT_GREEN)

@@ -1,125 +1,68 @@
 # FUSION Project Structure
 
-FUSION has been reorganized into three main components for better modularity and separation of concerns.
-
-## Directory Structure
+## Directory Layout
 
 ```
 FUSION/
-├── framework/           # Core multi-agent framework
-│   ├── fusion_core.py   # Main orchestration logic
-│   └── logs/           # Runtime logs
-├── chat-cli/           # Multi-agent debate CLI
+├── framework/
+│   ├── fusion_core.py   # Agent + Fusion classes: provider routing, debate loop, synthesis
+│   └── logs/            # runs.jsonl — per-step JSONL run log
+├── chat-cli/
 │   └── cli/
-│       └── main.py     # Chat CLI entry point
-├── code-cli/           # Coding assistant CLI (based on Groq Code CLI)
-│   ├── src/           # TypeScript source code
-│   ├── dist/          # Compiled JavaScript
-│   ├── package.json   # Node.js dependencies
-│   └── README.md      # Code CLI documentation
-├── fusion              # Chat CLI launcher script
-├── fusion-code         # Code CLI launcher script
-└── README.md          # Main project documentation
+│       └── main.py      # CLI: arg parsing, onboarding, config, terminal UI
+├── tests/               # unittest suite for the framework and CLI config layer
+├── fusion               # launcher script (symlink-safe wrapper around main.py)
+├── README.md
+└── STRUCTURE.md
 ```
 
 ## Components
 
-### 1. Framework (`framework/`)
-- **Purpose**: Core multi-agent orchestration logic
-- **Language**: Python
-- **Key Files**: 
-  - `fusion_core.py` - Main Fusion class and Agent implementations
-  - `logs/` - Runtime logs and debugging information
+### Framework (`framework/`)
+Core multi-agent orchestration, pure Python (no required third-party deps;
+`requests` is used if present, otherwise `urllib`).
 
-### 2. Chat CLI (`chat-cli/`)
-- **Purpose**: Multi-agent debate and discussion interface
-- **Language**: Python
-- **Usage**: `fusion --query "Your question"`
-- **Features**:
-  - Multi-agent debates with 2-3 review rounds
-  - Final synthesis by designated agent
-  - Paper writing mode
-  - Benchmark mode
-  - Interactive onboarding
+- `Agent` — wraps a chat-completion call. Routes slash-prefixed model IDs
+  (e.g. `google/gemini-2.5-pro-preview`) to OpenRouter and bare `gemini-*`
+  names to the native Gemini API. Handles retries with exponential backoff,
+  per-agent fallback models, and a labeled mock response when no key is set.
+- `Fusion` — runs the debate: initial generation from every agent, N review
+  rounds where each agent critiques the others and emits a refined answer,
+  then a final synthesis. Every step is appended to `logs/runs.jsonl`.
 
-### 3. Code CLI (`code-cli/`)
-- **Purpose**: Coding assistant with file operations
-- **Language**: TypeScript/Node.js
-- **Usage**: `fusion-code`
-- **Features**:
-  - File reading, writing, and editing
-  - Command execution
-  - Code analysis and generation
-  - Interactive chat interface
-  - Tool-based operations
+### Chat CLI (`chat-cli/`)
+Terminal front end over the framework: interactive key onboarding, JSON config
+for agents/models/rounds, paper-writing mode, a benchmark runner over a JSON
+dataset, and the spinner/typewriter UI.
 
 ## Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/teddytennant/FUSION
 cd FUSION
-
-# Install chat CLI
+# optional: put it on PATH
 sudo ln -s "$(pwd)/fusion" /usr/local/bin/fusion
-
-# Install code CLI
-cd code-cli
-npm install
-npm run build
-npm link
-cd ..
 ```
 
 ## Usage
 
-### Chat CLI (Multi-Agent Debate)
 ```bash
-# Interactive mode
-fusion
-
-# Direct query
-fusion --query "Explain quantum computing"
-
-# Onboarding
-fusion --onboard
-```
-
-### Code CLI (Coding Assistant)
-```bash
-# Start coding session
-fusion-code
-
-# Use /login to set up API key
-# Use /help to see available commands
-# Use tools to read, create, and edit files
+./fusion                                   # interactive
+./fusion --query "Explain quantum computing"
+./fusion --query "..." --rounds 2 --paper-mode
+./fusion --onboard                         # paste API keys, run a connectivity check
 ```
 
 ## API Keys
 
-Both CLIs use OpenRouter API keys:
-- **Environment Variable**: `OPENROUTER_API_KEY`
-- **Get Key**: https://openrouter.ai/keys
-- **Supported Models**: Gemini 2.5 Pro, Grok-4, DeepSeek, and others
+Read from the environment (or entered via `--onboard`):
+
+- `OPENROUTER_API_KEY` — https://openrouter.ai/keys
+- `GEMINI_API_KEY` — optional, enables the native Gemini route for bare
+  `gemini-*` model names
 
 ## Development
 
-### Chat CLI Development
-- Edit files in `chat-cli/` and `framework/`
-- Test with `fusion --query "test"`
-
-### Code CLI Development
-- Edit TypeScript files in `code-cli/src/`
-- Run `npm run dev` for watch mode
-- Test with `fusion-code`
-
-## Key Differences
-
-| Feature | Chat CLI | Code CLI |
-|---------|----------|----------|
-| **Purpose** | Multi-agent debates | Coding assistance |
-| **Language** | Python | TypeScript |
-| **Interface** | Command-line arguments | Interactive TUI |
-| **Tools** | Debate orchestration | File operations |
-| **Output** | Synthesized answers | Code files |
-| **Best For** | Complex questions | Development tasks | 
+- Edit `framework/fusion_core.py` and `chat-cli/cli/main.py`.
+- Run the tests: `python -m unittest discover -s tests`.
+- Logs land in `framework/logs/runs.jsonl`.

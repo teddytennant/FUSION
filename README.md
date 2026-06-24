@@ -18,7 +18,7 @@ Pure Python, no framework dependencies (`requests` optional, falls back to `urll
 - **`chat-cli/`** — terminal CLI on top of the framework: interactive key onboarding, JSON config for agents/models/rounds, a paper-writing mode (forces academic structure in the prompts), a simple benchmark mode over a JSON dataset, and spinner/typewriter terminal UI.
 - **`tests/`** — pytest unit tests for the Agent and Fusion classes.
 
-There was also a `code-cli` (a coding-assistant fork pulled in as a submodule); it broke and was removed. The `fusion-code` launcher script is a leftover.
+There was also a `code-cli` (a coding-assistant fork pulled in as a submodule); it broke and was removed, along with its `fusion-code` launcher.
 
 The "debate improves answers" premise was never rigorously benchmarked — the benchmark mode just runs prompts through the pipeline and saves outputs. Treat the architecture, not the results, as the artifact.
 
