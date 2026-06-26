@@ -177,15 +177,30 @@ impl Config {
 /// The default on-disk path for the config file
 /// (`~/.config/fusion/config.toml` on Linux), if a home/config dir is resolvable.
 pub fn default_config_path() -> Option<PathBuf> {
-    directories::ProjectDirs::from("", "", "fusion")
-        .map(|d| d.config_dir().join("config.toml"))
+    directories::ProjectDirs::from("", "", "fusion").map(|d| d.config_dir().join("config.toml"))
 }
 
 /// The default on-disk path for the JSONL run log
 /// (`~/.local/share/fusion/runs.jsonl` on Linux).
 pub fn default_log_path() -> Option<PathBuf> {
-    directories::ProjectDirs::from("", "", "fusion")
-        .map(|d| d.data_dir().join("runs.jsonl"))
+    directories::ProjectDirs::from("", "", "fusion").map(|d| d.data_dir().join("runs.jsonl"))
+}
+
+/// Load the effective config given an optional explicit `--config` path.
+///
+/// Resolution: if `explicit` is given, load it; else load the default path if it
+/// exists; else fall back to [`Config::default`]. The environment API key is
+/// then layered on top. CLI-flag overrides are applied by the caller.
+pub fn load_effective(explicit: Option<&Path>) -> Result<Config> {
+    let mut cfg = match explicit {
+        Some(p) => Config::load_from_path(p)?,
+        None => match default_config_path() {
+            Some(p) if p.exists() => Config::load_from_path(&p)?,
+            _ => Config::default(),
+        },
+    };
+    cfg.apply_env_key();
+    Ok(cfg)
 }
 
 #[cfg(test)]
@@ -199,7 +214,11 @@ mod tests {
         assert_eq!(cfg.agents.len(), 3);
         // Every model id is an OpenRouter slash-prefixed id.
         for a in &cfg.agents {
-            assert!(a.model.contains('/'), "model {} not slash-prefixed", a.model);
+            assert!(
+                a.model.contains('/'),
+                "model {} not slash-prefixed",
+                a.model
+            );
         }
     }
 
@@ -231,9 +250,15 @@ mod tests {
     #[test]
     fn require_api_key_errors_when_blank() {
         let mut cfg = Config::default();
-        assert!(matches!(cfg.require_api_key(), Err(FusionError::MissingApiKey)));
+        assert!(matches!(
+            cfg.require_api_key(),
+            Err(FusionError::MissingApiKey)
+        ));
         cfg.api_key = Some("   ".into());
-        assert!(matches!(cfg.require_api_key(), Err(FusionError::MissingApiKey)));
+        assert!(matches!(
+            cfg.require_api_key(),
+            Err(FusionError::MissingApiKey)
+        ));
         cfg.api_key = Some("real".into());
         assert_eq!(cfg.require_api_key().unwrap(), "real");
     }
@@ -247,21 +272,4 @@ mod tests {
         let loaded = Config::load_from_path(&path).unwrap();
         assert_eq!(cfg, loaded);
     }
-}
-
-/// Load the effective config given an optional explicit `--config` path.
-///
-/// Resolution: if `explicit` is given, load it; else load the default path if it
-/// exists; else fall back to [`Config::default`]. The environment API key is
-/// then layered on top. CLI-flag overrides are applied by the caller.
-pub fn load_effective(explicit: Option<&Path>) -> Result<Config> {
-    let mut cfg = match explicit {
-        Some(p) => Config::load_from_path(p)?,
-        None => match default_config_path() {
-            Some(p) if p.exists() => Config::load_from_path(&p)?,
-            _ => Config::default(),
-        },
-    };
-    cfg.apply_env_key();
-    Ok(cfg)
 }

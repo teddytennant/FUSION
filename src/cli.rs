@@ -1,11 +1,21 @@
 //! Command-line interface: argument parsing and top-level dispatch.
 //!
-//! NOTE: Stage-0 stub pinning the public API. The real implementation (config
-//! merge with flags, onboarding dispatch, REPL/one-shot query, wiring the
-//! provider + UI into a debate) is filled in during Stage 3.
+//! Wires the pieces together: load/merge config, build the OpenRouter provider,
+//! construct a [`Fusion`] engine, and run either a one-shot query or an
+//! interactive REPL — rendering progress via [`ProgressReporter`]. Onboarding is
+//! dispatched here when `--onboard` is passed.
 
+use crate::config::{self, Config};
+use crate::fusion::{Fusion, ProgressEvent};
+use crate::onboarding;
+use crate::openrouter::OpenRouterClient;
+use crate::provider::ChatProvider;
+use crate::ui::ProgressReporter;
+use anyhow::Context;
 use clap::Parser;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// FUSION — multi-agent LLM debate on the command line.
 #[derive(Debug, Parser)]
@@ -48,8 +58,167 @@ pub struct Cli {
     pub no_progress: bool,
 }
 
+impl Cli {
+    /// Apply CLI flag overrides onto a loaded config (highest precedence).
+    fn apply_overrides(&self, cfg: &mut Config) {
+        if let Some(r) = self.rounds {
+            cfg.rounds = r;
+        }
+        if let Some(t) = self.temperature {
+            cfg.temperature = t;
+        }
+        if let Some(m) = self.max_tokens {
+            cfg.max_tokens = m;
+        }
+        if let Some(ref p) = self.log_file {
+            cfg.log_file = Some(p.clone());
+        }
+    }
+}
+
 /// Parse arguments and run the requested action.
 pub async fn run() -> anyhow::Result<()> {
-    let _cli = Cli::parse();
-    unimplemented!("implemented in Stage 3")
+    let cli = Cli::parse();
+
+    // Onboarding short-circuits everything else.
+    if cli.onboard {
+        let save_path = onboarding_save_path(cli.config.as_deref())?;
+        onboarding::run_onboarding(&save_path).await?;
+        return Ok(());
+    }
+
+    // Load config (defaults < file < env key), then layer CLI flags on top.
+    let mut cfg =
+        config::load_effective(cli.config.as_deref()).context("failed to load configuration")?;
+    cli.apply_overrides(&mut cfg);
+
+    // Require a key; nudge toward onboarding if missing.
+    let api_key = match cfg.require_api_key() {
+        Ok(k) => k.to_string(),
+        Err(_) => {
+            anyhow::bail!(
+                "no OpenRouter API key found.\n\
+                 Run `fusion --onboard` to set one up, or export OPENROUTER_API_KEY."
+            );
+        }
+    };
+
+    let client = OpenRouterClient::new(api_key, cfg.extra_headers.clone())
+        .context("failed to build OpenRouter client")?;
+    let provider: Arc<dyn ChatProvider> = Arc::new(client);
+    let fusion = Fusion::from_config(&cfg, provider).context("invalid configuration")?;
+
+    // Progress goes to stderr; only enable it when stderr is a TTY and the user
+    // didn't opt out.
+    let progress_enabled = !cli.no_progress && std::io::stderr().is_terminal();
+
+    match cli.query.clone() {
+        Some(q) => {
+            run_one(&fusion, &q, cli.paper_mode, progress_enabled).await?;
+        }
+        None => {
+            run_repl(&fusion, cli.paper_mode, progress_enabled).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Run a single debate and print the final answer to stdout.
+async fn run_one(
+    fusion: &Fusion,
+    query: &str,
+    paper_mode: bool,
+    progress_enabled: bool,
+) -> anyhow::Result<()> {
+    let mut reporter = ProgressReporter::new(progress_enabled);
+    let (answer, _meta) = fusion
+        .debate(query, paper_mode, &mut |e: ProgressEvent| {
+            reporter.handle(&e)
+        })
+        .await
+        .context("debate failed")?;
+    // The answer is the program's real output: stdout, nothing else on it.
+    println!("{answer}");
+    Ok(())
+}
+
+/// Interactive REPL: each input line is debated; EOF or `exit`/`quit` ends it.
+async fn run_repl(fusion: &Fusion, paper_mode: bool, progress_enabled: bool) -> anyhow::Result<()> {
+    eprintln!("FUSION interactive chat. Type a query and press Enter. Ctrl-D or `exit` to quit.");
+    let stdin = std::io::stdin();
+    loop {
+        eprint!("\n› ");
+        std::io::stderr().flush().ok();
+        let mut line = String::new();
+        let n = stdin.read_line(&mut line).context("failed to read input")?;
+        if n == 0 {
+            // EOF.
+            eprintln!();
+            break;
+        }
+        let query = line.trim();
+        if query.is_empty() {
+            continue;
+        }
+        if matches!(query, "exit" | "quit") {
+            break;
+        }
+        if let Err(e) = run_one(fusion, query, paper_mode, progress_enabled).await {
+            // Keep the REPL alive on a single failed debate.
+            eprintln!("error: {e:#}");
+        }
+    }
+    Ok(())
+}
+
+/// Where onboarding should write the config: the explicit `--config` path if
+/// given, else the platform default. Errors if neither is resolvable.
+fn onboarding_save_path(explicit: Option<&std::path::Path>) -> anyhow::Result<PathBuf> {
+    if let Some(p) = explicit {
+        return Ok(p.to_path_buf());
+    }
+    config::default_config_path()
+        .context("could not determine a config directory; pass --config <path>")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_parses_flags() {
+        let cli = Cli::try_parse_from([
+            "fusion",
+            "--query",
+            "hello",
+            "--rounds",
+            "2",
+            "--paper-mode",
+            "--no-progress",
+        ])
+        .unwrap();
+        assert_eq!(cli.query.as_deref(), Some("hello"));
+        assert_eq!(cli.rounds, Some(2));
+        assert!(cli.paper_mode);
+        assert!(cli.no_progress);
+        assert!(!cli.onboard);
+    }
+
+    #[test]
+    fn overrides_apply_in_precedence_order() {
+        let cli = Cli::try_parse_from(["fusion", "--rounds", "7", "--temperature", "0.1"]).unwrap();
+        let mut cfg = Config::default();
+        cli.apply_overrides(&mut cfg);
+        assert_eq!(cfg.rounds, 7);
+        assert_eq!(cfg.temperature, 0.1);
+        // Untouched flags leave defaults intact.
+        assert_eq!(cfg.max_tokens, Config::default().max_tokens);
+    }
+
+    #[test]
+    fn no_args_means_repl_no_onboard() {
+        let cli = Cli::try_parse_from(["fusion"]).unwrap();
+        assert!(cli.query.is_none());
+        assert!(!cli.onboard);
+    }
 }

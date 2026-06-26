@@ -72,8 +72,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("sub").join("runs.jsonl");
         let logger = JsonlLogger::new(&path);
-        logger.log_step("initial", "Alice", "m/x", "prompt-a", &json!({"content": "hi"}));
-        logger.log_step("synthesis", "Synth", "m/y", "prompt-b", &json!({"content": "bye"}));
+        logger.log_step(
+            "initial",
+            "Alice",
+            "m/x",
+            "prompt-a",
+            &json!({"content": "hi"}),
+        );
+        logger.log_step(
+            "synthesis",
+            "Synth",
+            "m/y",
+            "prompt-b",
+            &json!({"content": "bye"}),
+        );
 
         let contents = std::fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = contents.lines().collect();

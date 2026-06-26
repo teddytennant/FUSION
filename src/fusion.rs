@@ -134,8 +134,13 @@ impl Fusion {
             });
             let prompt = prompts::build_initial_prompt(query, paper_mode);
             let (content, response_value) = self.run_step(agent, &prompt).await;
-            self.logger
-                .log_step("initial", &agent.name, &agent.model, &prompt, &response_value);
+            self.logger.log_step(
+                "initial",
+                &agent.name,
+                &agent.model,
+                &prompt,
+                &response_value,
+            );
             on_event(ProgressEvent::AgentDone {
                 phase: phase.clone(),
                 agent: agent.name.clone(),
@@ -166,8 +171,7 @@ impl Fusion {
                     .map(|(name, content)| (name.clone(), content.clone()))
                     .collect();
                 let self_prev = agent_latest.get(&agent.name).cloned().unwrap_or_default();
-                let prompt =
-                    prompts::build_review_prompt(query, &self_prev, &others, paper_mode);
+                let prompt = prompts::build_review_prompt(query, &self_prev, &others, paper_mode);
                 let (raw_content, response_value) = self.run_step(agent, &prompt).await;
                 let refined = prompts::extract_refined(&raw_content);
                 self.logger.log_step(
@@ -250,7 +254,10 @@ impl Fusion {
             Ok(resp) => (resp.content, resp.raw),
             Err(e) => {
                 tracing::warn!("{} failed to generate: {e}", agent.name);
-                (String::new(), json!({ "error": e.to_string(), "content": "" }))
+                (
+                    String::new(),
+                    json!({ "error": e.to_string(), "content": "" }),
+                )
             }
         }
     }
@@ -279,7 +286,10 @@ mod tests {
     }
     #[async_trait]
     impl ChatProvider for CountingProvider {
-        async fn chat(&self, req: &ChatRequest) -> std::result::Result<ChatResponse, ProviderError> {
+        async fn chat(
+            &self,
+            req: &ChatRequest,
+        ) -> std::result::Result<ChatResponse, ProviderError> {
             self.calls.lock().unwrap().push(req.clone());
             let content = format!("answer from {}", req.model);
             Ok(ChatResponse {
