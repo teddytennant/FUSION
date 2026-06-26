@@ -1,21 +1,15 @@
-# Byte-compiled / cache
-__pycache__/
-*.py[cod]
-
-# Virtual env
-.venv/
-env/
-venv/
+# Rust build artifacts
+/target
+**/*.rs.bk
 
 # OS
 .DS_Store
 
-# Logs and runs
-logs/
-*.log
-
 # Secrets
 .env
+
+# Local run artifacts (JSONL run logs default to the data dir, but be safe)
+*.jsonl
 
 # Editors
 .vscode/
