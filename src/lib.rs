@@ -1,24 +1,16 @@
-//! FUSION — a multi-agent LLM debate engine.
+//! FUSION — a multi-agent LLM debate CLI.
 //!
-//! Several agents (LLMs behind OpenRouter) each answer a query, critique each
-//! other's answers over N review rounds, and a synthesizer merges the refined
-//! answers into one final response. See [`fusion::Fusion::debate`] for the
-//! orchestration and [`prompts`] for the (verbatim-ported) prompt templates.
+//! The debate engine lives in the [`fusion_core`] crate; it is re-exported here
+//! so the binary's modules can keep referring to `crate::fusion`, `crate::config`,
+//! `crate::provider`, etc. unchanged. This crate adds the OpenRouter client and
+//! the user-facing surface (CLI, onboarding, server, terminal UI).
 
-pub mod agent;
+// Re-export the whole engine so `crate::{provider,agent,prompts,fusion,error,
+// logging,config}` resolve to the `fusion_core` modules.
+pub use fusion_core::*;
+
 pub mod cli;
-pub mod config;
-pub mod error;
-pub mod fusion;
-pub mod logging;
 pub mod onboarding;
 pub mod openrouter;
-pub mod prompts;
-pub mod provider;
 pub mod serve;
 pub mod ui;
-
-pub use config::Config;
-pub use error::{FusionError, ProviderError, Result};
-pub use fusion::{Fusion, ProgressEvent, RunMeta};
-pub use provider::{ChatProvider, ChatRequest, ChatResponse, Message, Usage};

@@ -372,22 +372,37 @@ dependencies = [
  "axum",
  "clap",
  "dialoguer",
- "directories",
+ "fusion-core",
  "indexmap",
  "indicatif",
- "once_cell",
- "regex",
  "reqwest",
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.18",
  "tokio",
  "toml",
  "tower",
  "tracing",
  "tracing-subscriber",
  "wiremock",
+]
+
+[[package]]
+name = "fusion-core"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "directories",
+ "indexmap",
+ "once_cell",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "tracing",
 ]
 
 [[package]]

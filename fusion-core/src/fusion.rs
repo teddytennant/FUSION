@@ -112,15 +112,20 @@ impl Fusion {
         self.logger.path()
     }
 
-    /// Run the full debate, emitting progress to `on_event`.
-    pub async fn debate(
+    /// Run only the answer + review phases (1 and 2), returning each agent's
+    /// final refined answer keyed by name, filtered to non-empty contributions
+    /// (falling back to all of them if every agent degraded).
+    ///
+    /// This is the seam a caller uses when it wants to run the synthesis step
+    /// itself — e.g. Wizard's `FusionProvider`, which synthesizes through its own
+    /// tool-capable, streaming provider rather than this engine's synthesizer.
+    /// [`Fusion::debate`] is `run_panel` followed by the built-in synthesis.
+    pub async fn run_panel(
         &self,
         query: &str,
         paper_mode: bool,
         on_event: &mut (dyn FnMut(ProgressEvent) + Send),
-    ) -> Result<(String, RunMeta)> {
-        on_event(ProgressEvent::Status("Starting debate...".into()));
-
+    ) -> IndexMap<String, String> {
         // ---- Phase 1: initial generation ------------------------------------
         let phase = "Initial".to_string();
         on_event(ProgressEvent::PhaseStart {
@@ -192,6 +197,31 @@ impl Fusion {
             agent_latest = new_latest;
         }
 
+        // Synthesize over genuine, non-empty contributions; if every agent
+        // degraded, fall back to all of them so the run still produces a result.
+        let synth_inputs: IndexMap<String, String> = agent_latest
+            .iter()
+            .filter(|(_, content)| !content.trim().is_empty())
+            .map(|(name, content)| (name.clone(), content.clone()))
+            .collect();
+        if synth_inputs.is_empty() {
+            agent_latest
+        } else {
+            synth_inputs
+        }
+    }
+
+    /// Run the full debate, emitting progress to `on_event`.
+    pub async fn debate(
+        &self,
+        query: &str,
+        paper_mode: bool,
+        on_event: &mut (dyn FnMut(ProgressEvent) + Send),
+    ) -> Result<(String, RunMeta)> {
+        on_event(ProgressEvent::Status("Starting debate...".into()));
+
+        let synth_inputs = self.run_panel(query, paper_mode, on_event).await;
+
         // ---- Phase 3: synthesis ---------------------------------------------
         let phase = "Synthesis".to_string();
         on_event(ProgressEvent::PhaseStart {
@@ -201,16 +231,6 @@ impl Fusion {
             phase: phase.clone(),
             agent: self.synthesizer.name.clone(),
         });
-        // Synthesize over genuine, non-empty contributions; if every agent
-        // degraded, fall back to all of them so the run still produces a result.
-        let mut synth_inputs: IndexMap<String, String> = agent_latest
-            .iter()
-            .filter(|(_, content)| !content.trim().is_empty())
-            .map(|(name, content)| (name.clone(), content.clone()))
-            .collect();
-        if synth_inputs.is_empty() {
-            synth_inputs = agent_latest.clone();
-        }
         let synth_prompt = prompts::build_synthesis_prompt(query, &synth_inputs, paper_mode);
         // A failed synthesizer is fatal — it is the final answer.
         let synth_res = self
