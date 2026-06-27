@@ -35,7 +35,18 @@ A debate runs in three phases:
 Each agent wraps OpenRouter chat-completion calls with retries and per-agent
 fallback models, so a failing model degrades gracefully to the next one.
 
-## Install / build
+## Install
+
+Download a prebuilt binary and run the onboarding wizard in one line — no Rust required:
+
+```bash
+# Linux x86_64
+curl -fsSL https://github.com/teddytennant/FUSION/releases/latest/download/fusion-linux-x86_64 -o fusion && chmod +x fusion && ./fusion --onboard
+```
+
+Swap the asset name for your platform: `fusion-linux-aarch64`, `fusion-macos-x86_64`, or `fusion-macos-aarch64`.
+
+### Build from source
 
 Requires a stable Rust toolchain.
 
