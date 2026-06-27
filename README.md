@@ -37,14 +37,21 @@ fallback models, so a failing model degrades gracefully to the next one.
 
 ## Install
 
-Download a prebuilt binary and run the onboarding wizard in one line — no Rust required:
+Install the prebuilt binary with one line — no Rust required. It detects your
+platform, downloads the right binary, and puts `fusion` on your `PATH`:
 
 ```bash
-# Linux x86_64
-curl -fsSL https://github.com/teddytennant/FUSION/releases/latest/download/fusion-linux-x86_64 -o fusion && chmod +x fusion && ./fusion --onboard
+curl -fsSL https://raw.githubusercontent.com/teddytennant/FUSION/master/install.sh | sh
 ```
 
-Swap the asset name for your platform: `fusion-linux-aarch64`, `fusion-macos-x86_64`, or `fusion-macos-aarch64`.
+Then just run `fusion --onboard` from anywhere. The script installs to
+`/usr/local/bin` if it's writable, otherwise `~/.local/bin` (override with
+`FUSION_INSTALL_DIR`); pin a release with `FUSION_VERSION=v0.1.0`.
+
+Prefer to grab the binary yourself? Download the asset for your platform —
+`fusion-linux-x86_64`, `fusion-linux-aarch64`, `fusion-macos-x86_64`, or
+`fusion-macos-aarch64` — from the [releases page](https://github.com/teddytennant/FUSION/releases/latest)
+and `chmod +x` it.
 
 ### Build from source
 
