@@ -106,6 +106,54 @@ fusion --query "..." --config ./my-config.toml --no-progress
 | `--max-tokens`  | Max tokens per completion (overrides config).                 |
 | `--log-file`    | Path to write the JSONL run log (overrides the default).      |
 | `--no-progress` | Disable the progress/spinner UI.                              |
+| `--serve`       | Serve an OpenAI-compatible HTTP API instead of running a query.|
+| `--host`        | Interface to bind in `--serve` mode (default `127.0.0.1`).    |
+| `--port`        | Port to bind in `--serve` mode (default `8080`).              |
+
+## Use as an OpenAI-compatible server
+
+FUSION can expose its debate engine behind the OpenAI Chat Completions API, so any
+tool that talks to a custom OpenAI base URL — **Codex CLI**, **opencode**, SDKs,
+etc. — can use a whole multi-model debate as if it were one model.
+
+```bash
+fusion --serve            # listens on http://127.0.0.1:8080
+fusion --serve --port 11434 --host 0.0.0.0
+```
+
+Endpoints:
+
+- `POST /v1/chat/completions` — runs a full debate over the request's `messages`
+  and returns the synthesized answer as the assistant message. Supports
+  `stream: true` (the answer arrives as a single content chunk, then `[DONE]`).
+- `GET /v1/models` — advertises a single virtual model, `fusion`.
+- `GET /health` — liveness check.
+
+The request `model` field is **ignored** for routing — FUSION always runs the
+roster from your config — but it's echoed back in the response. The server
+authenticates to OpenRouter with its own key, so any inbound `Authorization`
+header is accepted and ignored. It's unauthenticated; keep it bound to localhost
+or put it behind your own proxy.
+
+Quick check:
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{"model":"fusion","messages":[{"role":"user","content":"Explain quicksort"}]}'
+```
+
+Point a client at it:
+
+```bash
+# Codex CLI / opencode / any OpenAI client
+export OPENAI_BASE_URL="http://127.0.0.1:8080/v1"
+export OPENAI_API_KEY="unused"   # required by clients, ignored by FUSION
+```
+
+**Claude Code** speaks the Anthropic Messages format rather than OpenAI's, so it
+can't point at this endpoint directly — use an OpenAI↔Anthropic translating proxy,
+or reach FUSION the OpenAI way from the tools above.
 
 ## Config
 

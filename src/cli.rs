@@ -56,6 +56,19 @@ pub struct Cli {
     /// Disable the progress UI (useful when piping output).
     #[arg(long)]
     pub no_progress: bool,
+
+    /// Serve an OpenAI-compatible HTTP API instead of running a query. Point
+    /// tools like Codex or opencode at `http://<host>:<port>/v1`.
+    #[arg(long)]
+    pub serve: bool,
+
+    /// Host/interface to bind when `--serve` is set.
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: String,
+
+    /// Port to bind when `--serve` is set.
+    #[arg(long, default_value_t = 8080)]
+    pub port: u16,
 }
 
 impl Cli {
@@ -107,6 +120,13 @@ pub async fn run() -> anyhow::Result<()> {
         .context("failed to build OpenRouter client")?;
     let provider: Arc<dyn ChatProvider> = Arc::new(client);
     let fusion = Fusion::from_config(&cfg, provider).context("invalid configuration")?;
+
+    // Serve mode short-circuits the one-shot/REPL flow.
+    if cli.serve {
+        return crate::serve::run_server(Arc::new(fusion), &cli.host, cli.port, cli.paper_mode)
+            .await
+            .context("server failed");
+    }
 
     // Progress goes to stderr; only enable it when stderr is a TTY and the user
     // didn't opt out.

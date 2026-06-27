@@ -117,7 +117,7 @@ impl Fusion {
         &self,
         query: &str,
         paper_mode: bool,
-        on_event: &mut dyn FnMut(ProgressEvent),
+        on_event: &mut (dyn FnMut(ProgressEvent) + Send),
     ) -> Result<(String, RunMeta)> {
         on_event(ProgressEvent::Status("Starting debate...".into()));
 

@@ -15,6 +15,7 @@ pub mod onboarding;
 pub mod openrouter;
 pub mod prompts;
 pub mod provider;
+pub mod serve;
 pub mod ui;
 
 pub use config::Config;
