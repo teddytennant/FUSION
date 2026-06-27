@@ -1,0 +1,46 @@
+[package]
+name = "fusion"
+version = "0.1.0"
+edition = "2021"
+description = "A multi-agent LLM debate CLI: several models answer, critique each other over N rounds, then synthesize one answer."
+license = "MIT"
+repository = "https://github.com/teddytennant/FUSION"
+readme = "README.md"
+keywords = ["llm", "openrouter", "multi-agent", "cli", "ai"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "fusion"
+path = "src/main.rs"
+
+[lib]
+name = "fusion"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+clap = { version = "4", features = ["derive", "env"] }
+indicatif = "0.17"
+dialoguer = "0.11"
+directories = "5"
+regex = "1"
+once_cell = "1"
+indexmap = { version = "2", features = ["serde"] }
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+
+[dev-dependencies]
+wiremock = "0.6"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "test-util"] }
+tempfile = "3"
+
+[profile.release]
+lto = true
+strip = true
