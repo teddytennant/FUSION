@@ -238,3 +238,13 @@ release build) on every push and pull request.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## Star History
+
+<a href="https://www.star-history.com/#teddytennant/FUSION&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=teddytennant/FUSION&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=teddytennant/FUSION&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=teddytennant/FUSION&type=Date" />
+ </picture>
+</a>
