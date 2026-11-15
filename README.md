@@ -1,141 +1,115 @@
 # FUSION
 
 A multi-agent LLM debate CLI. Several models answer the same query, critique each
-other over N review rounds, then a synthesizer merges them into one answer — all
-routed through [OpenRouter](https://openrouter.ai).
-
-It's an open-source take on "model fusion" — running several frontier models
-against the same prompt and combining their answers instead of trusting any single
-one. Because every call goes through OpenRouter, you pick the exact roster: mix
-models from different labs, swap them per run, and pay per token with no lock-in.
-In practice the fusion of independent models tends to beat the best single model in
-it, since they catch each other's mistakes during the review rounds.
+other over a few review rounds, and a synthesizer merges the results into one
+answer. Every call goes through [OpenRouter](https://openrouter.ai), so the roster
+is any mix of models it serves.
 
 ## What roster to run
 
-From experience, the strongest pairing has been **Claude Opus 4.8 + GLM 5.2**. Two
-strong, independent models debating each other generally land at or above the
-quality of a three-model roster — adding a third model has diminishing returns and
-costs more latency and tokens. If you do want a third voice, **GPT 5.5** is the one
-I'd add.
+I run **Claude Opus 4.8 + GLM 5.2**, and that's the default roster. A third model
+adds latency and tokens for not much gain. If you want one anyway, I'd add
+**GPT 5.5**.
 
-So: start with two models (Opus 4.8 + GLM 5.2). Add GPT 5.5 only if you have a
-reason to.
+## How a debate runs
 
-## How it works
+1. **Initial generation:** every agent answers the query on its own.
+2. **Review rounds:** for `rounds` iterations, each agent reads the others' latest
+   answers, critiques them and writes a refined answer.
+3. **Synthesis:** the synthesizer merges the final answers into one response.
 
-A debate runs in three phases:
-
-1. **Initial generation** — every configured agent answers the query independently.
-2. **Review rounds** — for `rounds` iterations, each agent sees the others' latest
-   answers, critiques them, and emits a refined answer.
-3. **Synthesis** — a synthesizer agent merges the final answers into a single
-   response.
-
-Each agent wraps OpenRouter chat-completion calls with retries and per-agent
-fallback models, so a failing model degrades gracefully to the next one.
+Each agent retries a model up to 3 times with backoff on 408, 409, 429, 5xx or
+transport errors. Any other failure, or running out of retries, moves it to the next
+of its `fallback_models`.
 
 ## Install
 
-Install the prebuilt binary with one line — no Rust required. It detects your
-platform, downloads the right binary, and puts `fusion` on your `PATH`:
+Prebuilt binaries for Linux and macOS (x86_64 and aarch64):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/teddytennant/FUSION/master/install.sh | sh
 ```
 
-Then just run `fusion --onboard` from anywhere. The script installs to
-`/usr/local/bin` if it's writable, otherwise `~/.local/bin` (override with
-`FUSION_INSTALL_DIR`); pin a release with `FUSION_VERSION=v0.1.0`.
+The script installs to `/usr/local/bin` if it's writable, otherwise `~/.local/bin`.
+Set `FUSION_INSTALL_DIR` to pick another directory, or `FUSION_VERSION=v0.1.0` to pin
+a release. You can also download `fusion-linux-x86_64`, `fusion-linux-aarch64`,
+`fusion-macos-x86_64` or `fusion-macos-aarch64` from the
+[releases page](https://github.com/teddytennant/FUSION/releases/latest) and
+`chmod +x` it.
 
-Prefer to grab the binary yourself? Download the asset for your platform —
-`fusion-linux-x86_64`, `fusion-linux-aarch64`, `fusion-macos-x86_64`, or
-`fusion-macos-aarch64` — from the [releases page](https://github.com/teddytennant/FUSION/releases/latest)
-and `chmod +x` it.
-
-### Build from source
-
-Requires a stable Rust toolchain.
+The current release, v0.1.0, predates `--serve`. To use server mode, build from
+source with a stable Rust toolchain:
 
 ```bash
-cargo build --release
+cargo build --release   # binary at target/release/fusion
 ```
-
-The binary is produced at `target/release/fusion`.
 
 ## Setup
 
-FUSION needs an OpenRouter API key. There are two ways to provide it:
-
-- **Interactive wizard** — run `fusion --onboard`. It validates the key against
-  OpenRouter and writes it to `~/.config/fusion/config.toml`.
-- **Environment variable** — set `OPENROUTER_API_KEY` in your shell.
+FUSION needs an OpenRouter API key. Either run the wizard, which checks the key
+with a cheap completion, asks for a roster and round count, and writes
+`~/.config/fusion/config.toml`:
 
 ```bash
 fusion --onboard
-# or
+```
+
+or export the key:
+
+```bash
 export OPENROUTER_API_KEY="sk-or-..."
 ```
 
 ## Usage
 
 ```bash
-# Single query
 fusion --query "Explain quicksort"
-
-# Interactive mode (no query → REPL)
-fusion
-
-# Academic structure, one review round
+fusion            # no query: interactive REPL, `exit` or Ctrl-D to quit
 fusion --query "Compare two database isolation levels" --paper-mode --rounds 1
-
-# Use a specific config file, no progress UI
 fusion --query "..." --config ./my-config.toml --no-progress
 ```
 
-### Flags
+| Flag            | Description                                                  |
+| --------------- | ------------------------------------------------------------ |
+| `-q, --query`   | The query to debate. Omit for the REPL.                      |
+| `--onboard`     | Run the setup wizard and exit.                               |
+| `--config`      | Config file path (overrides the default location).           |
+| `--paper-mode`  | Ask for an academic paper structure in the prompts.          |
+| `--rounds`      | Number of review rounds.                                     |
+| `--temperature` | Sampling temperature.                                        |
+| `--max-tokens`  | Max tokens per completion.                                   |
+| `--log-file`    | Where to write the JSONL run log.                            |
+| `--no-progress` | Turn off the progress spinner.                               |
+| `--serve`       | Serve an OpenAI-compatible API instead of running a query.   |
+| `--host`        | Bind address for `--serve` (default `127.0.0.1`).            |
+| `--port`        | Port for `--serve` (default `8080`).                         |
 
-| Flag            | Description                                                   |
-| --------------- | ------------------------------------------------------------- |
-| `--query`       | The query to debate. Omit for an interactive REPL.            |
-| `--onboard`     | Run the interactive key-onboarding wizard and exit.           |
-| `--config`      | Path to a config file (overrides the default location).       |
-| `--paper-mode`  | Force an academic structure in the prompts.                   |
-| `--rounds`      | Number of review rounds (overrides config).                   |
-| `--temperature` | Sampling temperature (overrides config).                      |
-| `--max-tokens`  | Max tokens per completion (overrides config).                 |
-| `--log-file`    | Path to write the JSONL run log (overrides the default).      |
-| `--no-progress` | Disable the progress/spinner UI.                              |
-| `--serve`       | Serve an OpenAI-compatible HTTP API instead of running a query.|
-| `--host`        | Interface to bind in `--serve` mode (default `127.0.0.1`).    |
-| `--port`        | Port to bind in `--serve` mode (default `8080`).              |
+The answer goes to stdout and progress to stderr, so piping works.
 
-## Use as an OpenAI-compatible server
+## Server mode
 
-FUSION can expose its debate engine behind the OpenAI Chat Completions API, so any
-tool that talks to a custom OpenAI base URL — **Codex CLI**, **opencode**, SDKs,
-etc. — can use a whole multi-model debate as if it were one model.
+`fusion --serve` puts the debate behind the OpenAI Chat Completions API, so
+anything that takes a custom OpenAI base URL (Codex CLI, opencode, the SDKs) can
+use a whole debate as one model.
 
 ```bash
-fusion --serve            # listens on http://127.0.0.1:8080
-fusion --serve --port 11434 --host 0.0.0.0
+fusion --serve
+fusion --serve --host 0.0.0.0 --port 11434
+
+export OPENAI_BASE_URL="http://127.0.0.1:8080/v1"
+export OPENAI_API_KEY="unused"   # clients want one; FUSION ignores it
 ```
 
-Endpoints:
+- `POST /v1/chat/completions` runs a debate over the request's `messages` and
+  returns the synthesized answer. `stream: true` works, but the answer arrives as
+  one chunk followed by `[DONE]`.
+- `GET /v1/models` lists one model, `fusion`.
+- `GET /health` returns `ok`.
 
-- `POST /v1/chat/completions` — runs a full debate over the request's `messages`
-  and returns the synthesized answer as the assistant message. Supports
-  `stream: true` (the answer arrives as a single content chunk, then `[DONE]`).
-- `GET /v1/models` — advertises a single virtual model, `fusion`.
-- `GET /health` — liveness check.
-
-The request `model` field is **ignored** for routing — FUSION always runs the
-roster from your config — but it's echoed back in the response. The server
-authenticates to OpenRouter with its own key, so any inbound `Authorization`
-header is accepted and ignored. It's unauthenticated; keep it bound to localhost
-or put it behind your own proxy.
-
-Quick check:
+The request's `model` is echoed back but doesn't pick anything; the roster always
+comes from your config. There's no auth on the server, so keep it on localhost or
+behind your own proxy. Claude Code speaks the Anthropic Messages API, so it needs a
+translating proxy in front.
 
 ```bash
 curl http://127.0.0.1:8080/v1/chat/completions \
@@ -143,86 +117,57 @@ curl http://127.0.0.1:8080/v1/chat/completions \
   -d '{"model":"fusion","messages":[{"role":"user","content":"Explain quicksort"}]}'
 ```
 
-Point a client at it:
-
-```bash
-# Codex CLI / opencode / any OpenAI client
-export OPENAI_BASE_URL="http://127.0.0.1:8080/v1"
-export OPENAI_API_KEY="unused"   # required by clients, ignored by FUSION
-```
-
-**Claude Code** speaks the Anthropic Messages format rather than OpenAI's, so it
-can't point at this endpoint directly — use an OpenAI↔Anthropic translating proxy,
-or reach FUSION the OpenAI way from the tools above.
-
 ## Config
 
-Configuration lives in a TOML file at `~/.config/fusion/config.toml` on Linux
-(the platform config dir elsewhere). The schema, briefly:
+TOML at `~/.config/fusion/config.toml` on Linux (the platform config dir
+elsewhere). Without a file, FUSION uses the built-in Opus 4.8 + GLM 5.2 roster.
 
 ```toml
 rounds = 2
 max_tokens = 4096
 temperature = 0.7
 
-# Recommended two-model fusion: Opus 4.8 + GLM 5.2.
 [[agents]]
+name = "Claude Opus 4.8"
 model = "anthropic/claude-opus-4.8"
-role = "analyst"
+role = "general reasoning"
 fallback_models = ["anthropic/claude-sonnet-4.6"]
 
 [[agents]]
+name = "GLM 5.2"
 model = "z-ai/glm-5.2"
 fallback_models = ["z-ai/glm-4.6"]
 
-# Add a third agent only if you want it — GPT 5.5 is the one to reach for:
+# Optional third agent:
 # [[agents]]
+# name = "GPT 5.5"
 # model = "openai/gpt-5.5"
 # fallback_models = ["openai/gpt-5.1"]
 
 [synthesizer]
+name = "Synthesizer"
 model = "anthropic/claude-opus-4.8"
 fallback_models = ["z-ai/glm-5.2"]
 ```
 
-- `agents` — each has a `model`, optional `role`, and an ordered list of
-  `fallback_models`.
-- `synthesizer` — the agent that merges the final answers (also has fallbacks).
-- `rounds`, `max_tokens`, `temperature` — debate-wide defaults.
+Every agent and the synthesizer need a unique `name` and a `model` (an OpenRouter
+model id). `role` and `fallback_models` are optional. Other top-level keys:
+`api_key`, `seed`, `log_file`, and `extra_headers` (a table of HTTP headers sent with
+every OpenRouter request).
 
-Model ids are OpenRouter routes, so any provider OpenRouter exposes works — mix and
-match across labs (Anthropic, OpenAI, Z.ai, Google, xAI, DeepSeek, and others).
+Precedence, low to high: built-in defaults, config file, `OPENROUTER_API_KEY`, CLI
+flags.
 
-**Precedence** (low → high): built-in defaults < config file <
-`OPENROUTER_API_KEY` env var < CLI flags.
+Each debate appends one JSONL row per step (phase, agent, model, prompt, response)
+to `~/.local/share/fusion/runs.jsonl` on Linux, or to `--log-file`.
 
-## Run logs
+## Background
 
-Every debate appends JSONL rows — one per step, recording the phase, agent, model,
-request, and response — to a run log. By default this lives under the platform
-data dir (`~/.local/share/fusion/runs.jsonl` on Linux). Override the path with
-`--log-file`.
-
-## About this rewrite
-
-FUSION is a Rust rewrite of an earlier Python proof-of-concept. The debate
-algorithm — initial generation, N review rounds, synthesis — is preserved. The
-"debate improves answers" premise was never rigorously benchmarked in the original,
-and that hasn't changed here: treat the architecture as the artifact, not any
-particular result.
-
-## On the "model fusion" trend
-
-Fusing several frontier models into one answer is suddenly fashionable. OpenRouter
-shipped its own multi-agent debate product literally called **Fusion**
-([openrouter.ai/fusion](https://openrouter.ai/fusion)), and Sakura AI's **fugu** is
-landing around the same time. Both are arriving now, in 2026.
-
-This FUSION has been around since **August 2025** — well before either. OpenRouter
-even reused the name, which is a funny thing to discover about a project you've
-already been running for the better part of a year. The idea isn't novel and nobody
-owns it, but for the record: the name and the approach here predate the commercial
-versions.
+FUSION started in August 2025 as a Python proof of concept and was rewritten in
+Rust in June 2026 with the same debate algorithm. I haven't benchmarked the debate
+against a single model. OpenRouter has since shipped its own
+multi-model product under the same name,
+[openrouter.ai/fusion](https://openrouter.ai/fusion).
 
 ## Development
 
@@ -232,19 +177,8 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt
 ```
 
-CI runs these checks (formatting, clippy with warnings denied, tests, and a
-release build) on every push and pull request.
+CI runs fmt, clippy, tests and a release build on every push and pull request.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
-
-## Star History
-
-<a href="https://www.star-history.com/#teddytennant/FUSION&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=teddytennant/FUSION&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=teddytennant/FUSION&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=teddytennant/FUSION&type=Date" />
- </picture>
-</a>
+MIT, see [LICENSE](LICENSE).
